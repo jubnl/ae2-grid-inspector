@@ -1,0 +1,1750 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>AE2 Grid Inspector</title>
+    <script type="importmap">
+        {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.181.1/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.1/examples/jsm/"
+    }
+  }
+    </script>
+    <style>
+        :root {
+            --bg: #0b0f16;
+            --bg2: #111827;
+            --fg: #e5e7eb;
+            --muted: #94a3b8;
+            --accent: #60a5fa;
+            --danger: #f87171;
+            --border: #182235;
+            --starved: #ffb74d;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            background: var(--bg);
+            color: var(--fg);
+            font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Helvetica, Arial
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 30;
+            background: linear-gradient(to bottom, rgba(9, 13, 20, .9), rgba(9, 13, 20, .85)), var(--bg)
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 18px;
+            letter-spacing: .3px
+        }
+
+        .muted {
+            color: var(--muted)
+        }
+
+        .btn {
+            cursor: pointer;
+            background: #0f172a;
+            color: var(--fg);
+            border: 1px solid #1f2a44;
+            border-radius: 8px;
+            padding: 6px 10px
+        }
+
+        .btn.small {
+            padding: 4px 8px;
+            font-size: 12px;
+            border-radius: 7px
+        }
+
+        .chev {
+            display: inline-block;
+            transition: transform .2s ease
+        }
+
+        #controlsWrap {
+            overflow: hidden;
+            transition: max-height .25s ease, opacity .2s ease;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg2)
+        }
+
+        #controlsWrap.collapsed {
+            max-height: 0;
+            opacity: 0
+        }
+
+        #controls {
+            display: grid;
+            gap: 8px;
+            grid-template-columns:repeat(12, 1fr);
+            padding: 10px 16px
+        }
+
+        .ctl {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            grid-column: span 3
+        }
+
+        .ctl.wide {
+            grid-column: span 6
+        }
+
+        .ctl label {
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        .ctl input, .ctl select {
+            background: #0f172a;
+            color: var(--fg);
+            border: 1px solid #1f2a44;
+            border-radius: 8px;
+            padding: 6px 8px;
+            outline: none
+        }
+
+        #work {
+            display: grid;
+            grid-template-columns:820px 6px 1fr;
+            height: 50vh
+        }
+
+        #left {
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border)
+        }
+
+        #split {
+            background: #1f2a44;
+            cursor: col-resize
+        }
+
+        #right {
+            position: relative;
+            min-height: 460px
+        }
+
+        #tableWrap {
+            overflow: auto;
+            height: 100%
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            table-layout: fixed
+        }
+
+        th, td {
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+            word-break: break-word
+        }
+
+        th {
+            background: var(--bg);
+            position: sticky;
+            top: 0;
+            z-index: 5
+        }
+
+        thead tr.filters th {
+            position: sticky;
+            top: 34px;
+            background: var(--bg2);
+            z-index: 5
+        }
+
+        .sort-ind {
+            color: var(--accent);
+            font-size: 11px;
+            margin-left: 6px
+        }
+
+        tr:hover {
+            background: #0f1624
+        }
+
+        #canvasWrap {
+            position: absolute;
+            inset: 0
+        }
+
+        #overlay {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            z-index: 10;
+            background: rgba(15, 23, 42, .85);
+            border: 1px solid #1f2a44;
+            border-radius: 10px;
+            padding: 8px 10px;
+            color: var(--muted)
+        }
+
+        #tooltip {
+            position: fixed;
+            pointer-events: none;
+            background: rgba(17, 24, 39, .95);
+            color: var(--fg);
+            border: 1px solid #1f2a44;
+            border-radius: 8px;
+            padding: 6px 8px;
+            z-index: 100;
+            display: none
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border: 1px solid #1f2a44;
+            border-radius: 999px;
+            background: #0f172a;
+            color: var(--fg);
+            font-size: 12px;
+            white-space: nowrap
+        }
+
+        .pill button {
+            border: 0;
+            border-radius: 999px;
+            background: #1f2937;
+            color: var(--fg);
+            padding: 2px 6px;
+            cursor: pointer
+        }
+
+        #goto {
+            position: fixed;
+            right: 16px;
+            bottom: 16px;
+            z-index: 15;
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            background: #1f2937;
+            border: 1px solid #1f2a44;
+            border-radius: 12px;
+            padding: 8px 12px;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, .35)
+        }
+
+        #goto input {
+            width: 90px
+        }
+
+        #ctx {
+            position: fixed;
+            z-index: 200;
+            background: #0f172a;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: 0 10px 24px rgba(0, 0, 0, .35);
+            display: none;
+            min-width: 220px;
+            overflow: hidden
+        }
+
+        #ctx button {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: transparent;
+            color: var(--fg);
+            border: 0;
+            padding: 8px 12px;
+            font: inherit;
+            cursor: pointer
+        }
+
+        #ctx button:hover {
+            background: #162239
+        }
+
+        #ctx .sep {
+            height: 1px;
+            background: var(--border);
+            margin: 4px 0
+        }
+
+        #legendBtn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 12
+        }
+
+        #legend {
+            position: absolute;
+            top: 48px;
+            right: 10px;
+            z-index: 12;
+            display: none;
+            max-width: 480px;
+            background: rgba(12, 19, 32, .98);
+            border: 1px solid #1f2a44;
+            border-radius: 12px;
+            padding: 12px
+        }
+
+        #legend h3 {
+            margin: 0 0 8px 0;
+            font-size: 14px
+        }
+
+        #legend dl {
+            margin: 0
+        }
+
+        #legend dt {
+            font-weight: 600;
+            margin-top: 8px
+        }
+
+        #legend dd {
+            margin: 4px 0 0 0;
+            color: var(--muted)
+        }
+
+        .sw {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            margin-right: 6px;
+            vertical-align: -2px;
+            border: 1px solid #1f2a44
+        }
+
+        @media (max-width: 1280px) {
+            #work {
+                grid-template-columns:1fr 0 1fr
+            }
+
+            #split {
+                display: none
+            }
+        }
+    </style>
+</head>
+<body>
+<header>
+    <h1>AE2 Grid Inspector</h1>
+    <div style="display:flex; gap:8px;">
+        <button id="toggleCtl" class="btn small"><span id="toggleText">Hide filters</span> <span class="chev"
+                                                                                                 id="toggleChev">▲</span>
+        </button>
+    </div>
+</header>
+
+<div id="controlsWrap">
+    <div id="controls">
+        <div class="ctl wide">
+            <label>Load files (.zip with grid_*.json and chunks/*.snbt, or plain .json/.snbt)</label>
+            <input id="files" type="file" multiple/>
+        </div>
+
+        <div class="ctl">
+            <label>3D Dimension (table shows all)</label>
+            <select id="dim3d"></select>
+        </div>
+
+        <div class="ctl"><label>Level filter (supports * wildcard)</label><input id="fLevel"
+                                                                                 placeholder="minecraft:* or *mining*"/>
+        </div>
+        <div class="ctl"><label>Item filter (supports * wildcard)</label><input id="fItem" placeholder="ae2:*pattern*"/>
+        </div>
+
+        <div class="ctl"><label>Flags filter</label>
+            <select id="fFlags">
+                <option value="any">Any</option>
+                <option value="sus">SUS only</option>
+                <option value="starved">STARVED only</option>
+                <option value="cap">CAP only</option>
+                <option value="virt">VIRT only</option>
+                <option value="cons">CONS only</option>
+                <option value="none">None</option>
+            </select>
+        </div>
+
+        <div class="ctl"><label>Coords X</label>
+            <div style="display:flex;gap:6px"><input id="fXmin" type="number" placeholder="min"/><input id="fXmax"
+                                                                                                        type="number"
+                                                                                                        placeholder="max"/>
+            </div>
+        </div>
+        <div class="ctl"><label>Coords Y</label>
+            <div style="display:flex;gap:6px"><input id="fYmin" type="number" placeholder="min"/><input id="fYmax"
+                                                                                                        type="number"
+                                                                                                        placeholder="max"/>
+            </div>
+        </div>
+        <div class="ctl"><label>Coords Z</label>
+            <div style="display:flex;gap:6px"><input id="fZmin" type="number" placeholder="min"/><input id="fZmax"
+                                                                                                        type="number"
+                                                                                                        placeholder="max"/>
+            </div>
+        </div>
+
+        <div class="ctl"><label>Cube size (3D)</label><input id="cubeSize" type="number" step="0.05" value="0.35"/>
+        </div>
+        <div class="ctl">
+            <label>3D context</label>
+            <label style="display:flex;gap:6px;align-items:center;"><input id="showContext" type="checkbox" checked/>
+                Show non-matching as ghosts</label>
+            <label style="display:flex;gap:6px;align-items:center;margin-top:6px;"><input id="virtHeuristic"
+                                                                                          type="checkbox" checked/>
+                Heuristic virtual capacity (sum endpoints)</label>
+        </div>
+
+        <div class="ctl wide">
+            <label>Blacklist (affects flags; 3D visibility via toggle)</label>
+            <div style="display:flex;gap:6px;align-items:center">
+                <input id="blInput" placeholder="mod:item or mod:*"/>
+                <button class="btn" id="blAdd">Add</button>
+                <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="showBL" checked/>
+                    Render blacklisted items</label>
+            </div>
+            <div id="blList" style="margin-top:6px;"></div>
+        </div>
+
+        <div class="ctl wide">
+            <label>Non-consumers (do NOT use channels)</label>
+            <div style="display:flex;gap:6px;align-items:center">
+                <input id="ncInput" placeholder="mod:item"/>
+                <button class="btn" id="ncAdd">Add</button>
+            </div>
+            <div id="ncList" style="margin-top:6px;"></div>
+            <div class="muted" style="font-size:12px;margin-top:4px;">Affects channel demand immediately.</div>
+        </div>
+
+        <div class="ctl wide">
+            <label>SNBT whitelist (AE2 addons)</label>
+            <div style="display:flex;gap:6px;align-items:center">
+                <input id="wlInput" placeholder="namespace (e.g., ae2things)"/>
+                <button class="btn" id="wlAdd">Add</button>
+                <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" id="wlEnabled"/> Enable
+                    whitelist mode</label>
+            </div>
+            <div id="wlList" style="margin-top:6px;"></div>
+            <div class="muted" style="font-size:12px;margin-top:4px;">When enabled, only listed namespaces are shown
+                from SNBT-derived entries (applies live to current data).
+            </div>
+        </div>
+
+        <div class="ctl"><label>Cable caps (simple/dense)</label>
+            <div style="display:flex;gap:6px"><input id="cfgSimple" type="number" value="8"/><input id="cfgDense"
+                                                                                                    type="number"
+                                                                                                    value="32"/></div>
+        </div>
+        <div class="ctl"><label>Virtual caps (P2P/wireless)</label>
+            <div style="display:flex;gap:6px"><input id="cfgP2P" type="number" value="32"/><input id="cfgWireless"
+                                                                                                  type="number"
+                                                                                                  value="32"/></div>
+        </div>
+
+        <div class="ctl wide">
+            <button id="btnClear" class="btn">Clear</button>
+            <button id="btnReset" class="btn" style="margin-left:8px;">Reset</button>
+        </div>
+    </div>
+</div>
+
+<div id="work">
+    <div id="left">
+        <div id="tableWrap">
+            <table>
+                <thead>
+                <tr>
+                    <th data-col="level">Level <span class="sort-ind">⇅</span></th>
+                    <th data-col="item">Item</th>
+                    <th data-col="x">X</th>
+                    <th data-col="y">Y</th>
+                    <th data-col="z">Z</th>
+                    <th data-col="_flags">Flags</th>
+                </tr>
+                <tr class="filters">
+                    <th colspan="7" class="muted">Left-click row → copy <code>/tp</code> • Right-click → menu</th>
+                </tr>
+                </thead>
+                <tbody id="tbody"></tbody>
+            </table>
+        </div>
+        <div style="padding:6px 10px;border-top:1px solid var(--border);color:var(--muted)"><span
+                id="count">0 rows</span></div>
+    </div>
+
+    <div id="split" title="Drag to resize table"></div>
+
+    <div id="right">
+        <div id="canvasWrap"></div>
+        <div id="overlay"></div>
+        <button id="legendBtn" class="btn small">Legend ▾</button>
+        <div id="legend" style="display:none">
+            <h3>Legend</h3>
+            <dl>
+                <dt>Flags and Colors</dt>
+
+                <dd><span class="sw" style="background:#a78bfa"></span>
+                    <strong>AE2 Cable Buses</strong> — Core network nodes that transmit channels between devices.
+                </dd>
+
+                <dd><span class="sw" style="background:#f472b6"></span>
+                    <strong>Capacity Providers (CAP)</strong> — Dense or smart cables that increase the number of
+                    available channels.
+                </dd>
+
+                <dd><span class="sw" style="background:#38bdf8"></span>
+                    <strong>Virtual Links (VIRT)</strong> — P2P tunnels, wireless or quantum bridges providing virtual
+                    connectivity between segments.
+                </dd>
+
+                <dd><span class="sw" style="background:#34d399"></span>
+                    <strong>Consumers (CONS)</strong> — Devices that use at least one channel (e.g., interfaces, buses,
+                    drives, etc.).
+                </dd>
+
+                <dd><span class="sw" style="background:#ffb74d"></span>
+                    <strong>Starved Islands (STARVED)</strong> — Groups of connected devices whose demand exceeds
+                    available channels.
+                </dd>
+
+                <dd><span class="sw" style="background:#f87171"></span>
+                    <strong>Suspicious Cables (SUS)</strong> — Cable buses flagged with a red ring because they are near
+                    or over channel capacity limits.
+                </dd>
+
+                <dd><span class="sw" style="background:#ffd54f"></span>
+                    <strong>Selection Highlight</strong> — Yellow pulsing outline indicating the last “Go to block”
+                    position (~20 s).
+                </dd>
+            </dl>
+        </div>
+
+        <div id="tooltip"></div>
+    </div>
+</div>
+
+<div id="goto">
+    <span style="opacity:.8;">Go to:</span>
+    <input id="gotoX" type="number" placeholder="X"/>
+    <input id="gotoY" type="number" placeholder="Y"/>
+    <input id="gotoZ" type="number" placeholder="Z"/>
+    <button id="gotoBtn" class="btn">Fly</button>
+</div>
+
+<div id="ctx">
+    <button data-action="goto">Go to block</button>
+    <button data-action="filter-item">Filter for this item</button>
+    <div class="sep"></div>
+    <button data-action="copy-coords">Copy coords</button>
+    <button data-action="copy-tp">Copy tp command</button>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script type="module">
+    import * as THREE from 'three';
+    import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+
+    const byId = id => document.getElementById(id);
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#39;'
+    }[c]));
+    const debounce = (fn, wait = 120) => {
+        let t;
+        return (...a) => {
+            clearTimeout(t);
+            t = setTimeout(() => fn(...a), wait);
+        }
+    };
+    const LS = {
+        collapsed: 'ae2_controls_collapsed',
+        blacklist: 'ae2_blacklist',
+        showBL: 'ae2_show_blacklisted',
+        whitelist: 'ae2_whitelist',
+        wlEnabled: 'ae2_whitelist_enabled',
+        nonConsumers: 'ae2_non_consumers'
+    };
+    const loadArr = k => {
+        try {
+            const r = localStorage.getItem(k);
+            return r ? JSON.parse(r) : [];
+        } catch {
+            return [];
+        }
+    };
+    const saveArr = (k, v) => {
+        try {
+            localStorage.setItem(k, JSON.stringify(v));
+        } catch {
+        }
+    };
+    const loadBool = (k, d = false) => {
+        const v = localStorage.getItem(k);
+        return v === null ? d : v === '1';
+    };
+    const saveBool = (k, v) => localStorage.setItem(k, v ? '1' : '0');
+
+    let RAW = [], RECORDS = [], BLACKLIST = loadArr(LS.blacklist).map(s => s.toLowerCase());
+    let NON_CONSUMERS = loadArr(LS.nonConsumers).map(s => s.toLowerCase());
+    if (!NON_CONSUMERS.length) NON_CONSUMERS = ['extendedae:ex_inscriber', 'advanced_ae:reaction_chamber'];
+    let SORT = {col: 'level', dir: 1}, DIMENSIONS = [], SELECTED_DIM = null;
+    let WL_LIST = loadArr(LS.whitelist);
+    if (!WL_LIST.length) WL_LIST = ['ae2', 'megacells', 'ae2things', 'appflux', 'aeinfinitybooster', 'ae2wtlib', 'extendedae', 'ae2networkanalyser', 'advanced_ae'];
+    let WL_ENABLED = loadBool(LS.wlEnabled, false);
+
+    let FACE_PARTS = new Map();
+    const GHOST_OPACITY = 0.14, UNFILTERED_OPACITY = 0.55;
+
+    function canonicalizeLevel(s) {
+        if (!s) return 'minecraft:overworld';
+        const l = s.toLowerCase();
+        if (l.includes('overworld')) return 'minecraft:overworld';
+        if (l.includes('nether')) return 'minecraft:the_nether';
+        if (l.includes('end')) return 'minecraft:the_end';
+        if (s.includes(':')) {
+            const [ns, rest] = s.split(':');
+            return `${ns}:${rest.replace(/^_+/, '')}`;
+        }
+        const idx = s.indexOf('_');
+        if (idx > 0) {
+            const ns = s.slice(0, idx);
+            const rest = s.slice(idx + 1);
+            return `${ns}:${rest}`;
+        }
+        return s;
+    }
+
+    const isNS = id => /^[a-z0-9_.-]+:[a-z0-9_./-]+$/.test(String(id));
+
+    function inferType(id) {
+        if (!id) return 'other';
+        if (id === 'ae2:cable_bus') return 'bus';
+        if (/^ae2:.*(smart_)?cable$/.test(id) || /^ae2:.*dense.*cable$/.test(id) || id === 'ae2:quartz_fiber') return 'cable';
+        if (id === 'ae2:cable_anchor') return 'anchor';
+        if (id.toLowerCase().includes(':p2p') || id.toLowerCase().includes('p2p_tunnel') || id.toLowerCase().includes('wireless_connect')) return 'virt';
+        return 'part';
+    }
+
+    const key = (l, x, y, z) => `${l}|${x}|${y}|${z}`;
+
+    function isAe2FamilyId(id) {
+        if (!id) return false;
+        const [ns, path = ''] = id.split(':');
+        if (!ns) return false;
+        if (WL_ENABLED) return WL_LIST.includes(ns);
+        const known = new Set(['ae2', 'megacells', 'ae2things', 'appflux', 'aeinfinitybooster', 'ae2wtlib', 'extendedae', 'ae2networkanalyser', 'advanced_ae']);
+        if (known.has(ns)) return true;
+        return ns.includes('ae2') || path.includes('ae2') || ns.includes('advanced_ae') || path.includes('advanced_ae');
+    }
+
+    /* ---------------- Loading ---------------- */
+    async function loadFiles(files) {
+        RAW = [];
+        FACE_PARTS = new Map();
+        const zips = [], plains = [];
+        for (const f of files) (f.name.toLowerCase().endsWith('.zip') ? zips : plains).push(f);
+
+        for (const f of plains) {
+            const text = await f.text();
+            if (f.name.endsWith('.json')) await parseGridJSON(text, f.name);
+            else if (f.name.endsWith('.snbt')) await parseSNBT(text, f.name);
+        }
+        for (const f of zips) {
+            const zip = await JSZip.loadAsync(f);
+            for (const [p, e] of Object.entries(zip.files)) {
+                if (!e.dir && /(^|\/)grid_.*\.json$/i.test(p)) {
+                    const t = await e.async('string');
+                    await parseGridJSON(t, p);
+                }
+            }
+            for (const [p, e] of Object.entries(zip.files)) {
+                if (!e.dir && /(^|\/)chunks\/.*\.snbt$/i.test(p)) {
+                    const t = await e.async('string');
+                    await parseSNBT(t, p);
+                }
+            }
+        }
+
+        mergeAndIndex();
+        computeSuspect();
+
+        const dims = [...new Set(RECORDS.map(r => r.level))];
+        SELECTED_DIM = dims[0] || null;
+        renderDimSelect();
+        renderTable();
+        build3D(true);
+    }
+
+    /* ------- parseGridJSON ------- */
+    async function parseGridJSON(text, src) {
+        let obj;
+        try {
+            obj = JSON.parse(text);
+        } catch {
+            return;
+        }
+        const nodeInfo = new Map();
+        for (const n of (obj.nodes || [])) {
+            const level = canonicalizeLevel(n.level || 'minecraft:overworld');
+            const loc = Array.isArray(n.location) ? n.location : null;
+            nodeInfo.set(n.id, {level, loc});
+        }
+        const push = (level, x, y, z, id) => {
+            if (isNS(id)) RAW.push({
+                level: canonicalizeLevel(level),
+                x,
+                y,
+                z,
+                item: id.toLowerCase(),
+                type: inferType(id),
+                grid: obj.id ?? obj.name ?? '',
+                src
+            });
+        };
+
+        function setFace(level, x, y, z, face, id) {
+            const k = `${canonicalizeLevel(level)}|${x | 0}|${y | 0}|${z | 0}`;
+            let m = FACE_PARTS.get(k);
+            if (!m) {
+                m = {};
+                FACE_PARTS.set(k, m);
+            }
+            m[face] = (id || '').toLowerCase();
+        }
+
+        for (const m of (obj.machines || [])) {
+            let level = canonicalizeLevel(m.level || nodeInfo.get(m.mainNodeId)?.level || 'minecraft:overworld');
+            let x, y, z;
+            if (m.pos && Number.isFinite(m.pos.x) && Number.isFinite(m.pos.y) && Number.isFinite(m.pos.z)) {
+                ({x, y, z} = m.pos);
+            } else if (nodeInfo.has(m.mainNodeId) && nodeInfo.get(m.mainNodeId).loc) {
+                const [nx, ny, nz] = nodeInfo.get(m.mainNodeId).loc;
+                x = nx;
+                y = ny;
+                z = nz;
+            }
+            const havePos = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
+            const name = (m.blockState?.Name || '').toLowerCase();
+            if (havePos && name) push(level, x | 0, y | 0, z | 0, name);
+            const faces = ['center', 'up', 'down', 'north', 'south', 'east', 'west'];
+            if (havePos && m.parts) for (const f of faces) {
+                const p = m.parts[f];
+                if (p?.item) {
+                    push(level, x | 0, y | 0, z | 0, (p.item || '').toLowerCase());
+                    setFace(level, x | 0, y | 0, z | 0, f, (p.item || '').toLowerCase());
+                }
+            }
+            if (havePos && m.data) {
+                for (const f of faces) {
+                    const d = m.data[f];
+                    const id = (d?.id || d?.outer?.id || '').toLowerCase();
+                    if (id) {
+                        push(level, x | 0, y | 0, z | 0, id);
+                        setFace(level, x | 0, y | 0, z | 0, f, id);
+                    }
+                }
+                const c = (m.data.cable?.id || '').toLowerCase();
+                if (c) {
+                    push(level, x | 0, y | 0, z | 0, c);
+                    setFace(level, x | 0, y | 0, z | 0, 'center', c);
+                }
+            }
+            if (havePos && m.item) push(level, x | 0, y | 0, z | 0, (m.item || '').toLowerCase());
+        }
+    }
+
+    /* ---- SNBT parsing ---- */
+    function extractBlockEntitiesArray(snbt) {
+        const m = /block_entities\s*:\s*\[/i.exec(snbt);
+        if (!m) return '';
+        let i = m.index + m[0].length - 1, depth = 0, start = i;
+        for (; i < snbt.length; i++) {
+            const ch = snbt[i];
+            if (ch === '[') depth++;
+            else if (ch === ']') {
+                depth--;
+                if (depth === 0) return snbt.slice(start, i + 1);
+            }
+        }
+        return '';
+    }
+
+    function* iterTopLevelObjects(slice) {
+        let depth = 0, start = -1;
+        for (let i = 0; i < slice.length; i++) {
+            const ch = slice[i];
+            if (ch === '{') {
+                if (depth === 0) start = i;
+                depth++;
+            } else if (ch === '}') {
+                depth--;
+                if (depth === 0 && start !== -1) {
+                    yield slice.slice(start, i + 1);
+                    start = -1;
+                }
+            }
+        }
+    }
+
+    async function parseSNBT(text, src) {
+        let level = 'minecraft:overworld';
+        const mm = /chunks\/([^/]+)_-?\d+_-?\d+\.snbt$/i.exec(src);
+        if (mm) level = canonicalizeLevel(mm[1]);
+
+        const arr = extractBlockEntitiesArray(text);
+        if (!arr) return;
+
+        const idRe = /\bid\s*:\s*"([a-z0-9_.-]+:[a-z0-9_./-]+)"/i;
+        const xRe = /\bx\s*:\s*(-?\d+)/i, yRe = /\by\s*:\s*(-?\d+)/i, zRe = /\bz\s*:\s*(-?\d+)/i;
+
+        for (const obj of iterTopLevelObjects(arr)) {
+            const idM = idRe.exec(obj);
+            if (!idM) continue;
+            const id = idM[1].toLowerCase();
+            if (!isAe2FamilyId(id)) continue;
+            const xm = xRe.exec(obj), ym = yRe.exec(obj), zm = zRe.exec(obj);
+            if (!xm || !ym || !zm) continue;
+            const x = +xm[1], y = +ym[1], z = +zm[1];
+            RAW.push({level: canonicalizeLevel(level), x, y, z, item: id, type: inferType(id), grid: '', src});
+        }
+    }
+
+    function mergeAndIndex() {
+        const seen = new Set(), out = [];
+        for (const r of RAW) {
+            const k = `${key(r.level, r.x, r.y, r.z)}|${r.item}`;
+            if (seen.has(k)) continue;
+            seen.add(k);
+            out.push({...r, level: canonicalizeLevel(r.level)});
+        }
+        RECORDS = out;
+        DIMENSIONS = [...new Set(RECORDS.map(r => r.level))].sort();
+    }
+
+    function renderDimSelect() {
+        const s = byId('dim3d');
+        s.innerHTML = '';
+        for (const d of DIMENSIONS) {
+            const o = document.createElement('option');
+            o.value = d;
+            o.textContent = d;
+            if (d === SELECTED_DIM) o.selected = true;
+            s.appendChild(o);
+        }
+    }
+
+    function nsAllowed(id) {
+        if (!WL_ENABLED) return true;
+        const ns = (id || '').split(':')[0];
+        return WL_LIST.includes(ns);
+    }
+
+    function blMatches(id) {
+        if (!id) return false;
+        const [mod] = id.split(':');
+        id = id.toLowerCase();
+        return BLACKLIST.includes(id) || BLACKLIST.includes(`${mod}:*`);
+    }
+
+    function renderList(paneId, items, onRemove) {
+        const div = byId(paneId);
+        div.innerHTML = '';
+        for (const e of items) {
+            const pill = document.createElement('span');
+            pill.className = 'pill';
+            pill.textContent = e + ' ';
+            const b = document.createElement('button');
+            b.textContent = '✕';
+            b.onclick = () => onRemove(e);
+            pill.appendChild(b);
+            div.appendChild(pill);
+            div.appendChild(document.createTextNode(' '));
+        }
+    }
+
+    function renderBlacklist() {
+        renderList('blList', BLACKLIST, (e) => {
+            BLACKLIST = BLACKLIST.filter(x => x !== e);
+            saveArr(LS.blacklist, BLACKLIST);
+            computeSuspect();
+            renderAll();
+        });
+    }
+
+    function renderNonConsumers() {
+        renderList('ncList', NON_CONSUMERS, (e) => {
+            NON_CONSUMERS = NON_CONSUMERS.filter(x => x !== e);
+            saveArr(LS.nonConsumers, NON_CONSUMERS);
+            computeSuspect();
+            renderAll();
+        });
+    }
+
+    function renderWhitelist() {
+        renderList('wlList', WL_LIST, (ns) => {
+            WL_LIST = WL_LIST.filter(x => x !== ns);
+            saveArr(LS.whitelist, WL_LIST);
+            renderAll();
+        });
+        byId('wlEnabled').checked = WL_ENABLED;
+    }
+
+    const DIRS = {
+        '1,0,0': 'east',
+        '-1,0,0': 'west',
+        '0,1,0': 'up',
+        '0,-1,0': 'down',
+        '0,0,1': 'south',
+        '0,0,-1': 'north'
+    };
+    const OPP = {up: 'down', down: 'up', north: 'south', south: 'north', east: 'west', west: 'east'};
+
+    function faceAt(level, x, y, z, face) {
+        const k = `${level}|${x}|${y}|${z}`;
+        const m = FACE_PARTS.get(k);
+        return m ? m[face] : undefined;
+    }
+
+    function isBarrierId(id) {
+        return !!id && (id === 'ae2:quartz_fiber' || /quartz_fiber$/.test(id) || id === 'ae2:cable_anchor');
+    }
+
+    const COLOR_NAMES = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan', 'purple', 'blue', 'brown', 'green', 'red', 'black'];
+
+    function cableCenterId(level, x, y, z) {
+        return faceAt(level, x, y, z, 'center');
+    }
+
+    function cableColorFromId(id) {
+        if (!id) return null;
+        const m = id.match(/^ae2:(?:([a-z_]+)_)?(?:(?:dense_)?(?:smart|covered|glass)_(?:cable|covered_cable|glass_cable)|.*cable)$/i);
+        if (m && m[1]) {
+            const c = m[1].toLowerCase();
+            if (COLOR_NAMES.includes(c)) return c;
+        }
+        if (/^ae2:.*(?:smart|covered|glass).*cable$/i.test(id)) return null;
+        return null;
+    }
+
+    function colorsBlock(a, b) {
+        return a && b && a !== b;
+    }
+
+    function edgeBlocked(level, x, y, z, dx, dy, dz) {
+        const f = DIRS[`${dx},${dy},${dz}`], nf = OPP[f];
+        const a = faceAt(level, x, y, z, f), b = faceAt(level, x + dx, y + dy, z + dz, nf);
+        if (isBarrierId(a) || isBarrierId(b)) return true;
+        const cA = cableCenterId(level, x, y, z), cB = cableCenterId(level, x + dx, y + dy, z + dz);
+        if (colorsBlock(cableColorFromId(cA), cableColorFromId(cB))) return true;
+        return false;
+    }
+
+    function computeSuspect() {
+        const simple = +byId('cfgSimple').value || 8, dense = +byId('cfgDense').value || 32,
+            p2p = +byId('cfgP2P').value || 32, wrl = +byId('cfgWireless').value || 32;
+        const isCableLike = id => /^ae2:.*_cable$/.test(id) || /^ae2:.*smart_.*cable$/.test(id) || /^ae2:.*dense.*cable$/.test(id) || id === 'ae2:quartz_fiber';
+        const isQuartz = id => id === 'ae2:quartz_fiber' || /quartz_fiber$/.test(id);
+        const isAnchor = id => id === 'ae2:cable_anchor';
+        const isCable = id => isCableLike(id) || isQuartz(id);
+        const isLink = id => {
+            if (!id) return false;
+            const s = id.toLowerCase();
+            return s.includes(':p2p') || s.includes('p2p_tunnel') || s.includes('wireless') || s.includes('connector') || s.includes('quantum') || s.includes('bridge') || s.includes('link');
+        };
+        const isBarrier = id => isQuartz(id) || isAnchor(id);
+        const isController = id => /controller/i.test(id);
+
+        const NON_CONS_SET = new Set(NON_CONSUMERS.map(s => s.toLowerCase()));
+        const CONSUMER_RE = /(pattern_provider|interface|import_bus|export_bus|storage_bus|formation_plane|annihilation_plane|molecular_assembler|crafting_monitor|io_port|drive|charger|level_emitter|condenser)/i;
+
+        function isConsumer(id) {
+            if (!id) return false;
+            if (id === 'ae2:cable_bus' || isCable(id) || isBarrier(id) || isLink(id) || isController(id)) return false;
+            if (blMatches(id)) return false;
+            const low = id.toLowerCase();
+            if (NON_CONS_SET.has(low)) return false;
+            return CONSUMER_RE.test(low);
+        }
+
+        const isPassThroughConsumer = id => !!id && /pattern_provider/i.test(id);
+
+        const POS = r => `${r.level}|${r.x}|${r.y}|${r.z}`;
+        const SIX = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+
+        const idx = new Map();
+        for (const r of RECORDS) {
+            if (!nsAllowed(r.item)) continue;
+            const k = POS(r);
+            let a = idx.get(k);
+            if (!a) idx.set(k, a = []);
+            a.push(r);
+        }
+        const hasBarrierAt = (L, x, y, z) => (idx.get(`${L}|${x}|${y}|${z}`) || []).some(r => isBarrier(r.item));
+
+        const capAt = new Map(), virtAt = new Map(), hasBusAt = new Map();
+        for (const [k, items] of idx) {
+            let cap = 0, virt = 0, hasBus = false;
+            for (const rr of items) {
+                const id = rr.item;
+                if (id === 'ae2:cable_bus') hasBus = true;
+                if (isCable(id)) {
+                    if (/dense/.test(id)) cap = Math.max(cap, dense);
+                    else if (isQuartz(id)) cap = Math.max(cap, 0);
+                    else cap = Math.max(cap, simple);
+                }
+                if (isLink(id)) virt = Math.max(virt, id.toLowerCase().includes('wireless') ? wrl : p2p);
+            }
+            if (cap) capAt.set(k, cap);
+            if (virt) virtAt.set(k, virt);
+            if (hasBus) hasBusAt.set(k, true);
+        }
+
+        const susLocal = new Set();
+        for (const [k, items] of idx) {
+            if (!items.some(it => it.item === 'ae2:cable_bus')) continue;
+            const [L, x, y, z] = k.split('|');
+            const X = +x, Y = +y, Z = +z;
+            let cons = 0, cap = (capAt.get(k) || 0) + (virtAt.get(k) || 0), barrier = false;
+            for (const [dx, dy, dz] of SIX) {
+                const nx = X + dx, ny = Y + dy, nz = Z + dz;
+                if (edgeBlocked(L, X, Y, Z, dx, dy, dz)) {
+                    barrier = true;
+                    continue;
+                }
+                if (hasBarrierAt(L, nx, ny, nz)) {
+                    barrier = true;
+                    continue;
+                }
+                const nk = `${L}|${nx}|${ny}|${nz}`;
+                const nitems = idx.get(nk) || [];
+                for (const rr of nitems) {
+                    if (isConsumer(rr.item)) cons++;
+                    if (isBarrier(rr.item)) barrier = true;
+                }
+                const nTot = (capAt.get(nk) || 0) + (virtAt.get(nk) || 0);
+                if (nTot > cap) cap = nTot;
+            }
+            if (cap === 0 && barrier) {
+            } else if (cap === 0) cap = simple;
+            if (cons > cap) susLocal.add(k);
+        }
+
+        for (const r of RECORDS) {
+            const id = r.item, k = POS(r);
+            r._isSus = susLocal.has(k) && id === 'ae2:cable_bus';
+            r._isCap = (isCable(id) && !/quartz_fiber$/.test(id));
+            r._isVirt = isLink(id);
+            r._isCons = isConsumer(id);
+            r._isStarved = false;
+        }
+
+        const isNodeAt = (L, x, y, z) => {
+            const arr = idx.get(`${L}|${x}|${y}|${z}`) || [];
+            return arr.some(rr => rr.item === 'ae2:cable_bus' || isPassThroughConsumer(rr.item));
+        };
+
+        const busSeeds = RECORDS.filter(r => r.item === 'ae2:cable_bus');
+        const visited = new Set();
+        const islandOf = new Map();
+        let nextId = 0;
+
+        function bfs(start) {
+            const L = start.level;
+            const q = [start];
+            while (q.length) {
+                const cur = q.pop();
+                const k = POS(cur);
+                if (visited.has(k)) continue;
+                visited.add(k);
+                islandOf.set(k, nextId);
+                for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+                    const nx = cur.x + dx, ny = cur.y + dy, nz = cur.z + dz;
+                    if (edgeBlocked(L, cur.x, cur.y, cur.z, dx, dy, dz)) continue;
+                    if (hasBarrierAt(L, nx, ny, nz)) continue;
+                    if (!isNodeAt(L, nx, ny, nz)) continue;
+                    const nk = `${L}|${nx}|${ny}|${nz}`;
+                    if (visited.has(nk)) continue;
+                    q.push({level: L, x: nx, y: ny, z: nz});
+                }
+            }
+        }
+
+        for (const b of busSeeds) {
+            const k = POS(b);
+            if (!visited.has(k)) {
+                bfs(b);
+                nextId++;
+            }
+        }
+        const islandCount = nextId;
+
+        function islandFor(r) {
+            const k = POS(r);
+            if (islandOf.has(k)) return islandOf.get(k);
+            for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+                const nk = `${r.level}|${r.x + dx}|${r.y + dy}|${r.z + dz}`;
+                if (islandOf.has(nk)) return islandOf.get(nk);
+            }
+            return undefined;
+        }
+
+        const demand = new Array(islandCount).fill(0), hasCtl = new Array(islandCount).fill(false),
+            islandHasBus = new Array(islandCount).fill(false);
+        for (const r of RECORDS) {
+            if (!nsAllowed(r.item)) continue;
+            const isl = islandFor(r);
+            if (isl === undefined) continue;
+            if (/controller/i.test(r.item)) hasCtl[isl] = true;
+            if (r.item === 'ae2:cable_bus') islandHasBus[isl] = true;
+            if (r._isCons || isPassThroughConsumer(r.item)) demand[isl]++;
+        }
+
+        const virtHeuristic = byId('virtHeuristic').checked;
+        const islandLinkCap = new Array(islandCount).fill(0);
+        if (virtHeuristic) {
+            for (const r of RECORDS) {
+                if (!nsAllowed(r.item)) continue;
+                const isl = islandFor(r);
+                if (isl === undefined) continue;
+                const s = r.item.toLowerCase();
+                const isL = s.includes(':p2p') || s.includes('p2p_tunnel') || s.includes('wireless') || s.includes('connector') || s.includes('quantum') || s.includes('bridge') || s.includes('link');
+                if (!isL) continue;
+                const cap = (s.includes('wireless') || s.includes('quantum') || s.includes('connector') || s.includes('bridge') || s.includes('link')) ? (+byId('cfgWireless').value || 32) : (+byId('cfgP2P').value || 32);
+                islandLinkCap[isl] += cap;
+            }
+        }
+
+        const capAtPos = new Map();
+        for (const [k, cap] of capAt) {
+            const isl = islandOf.get(k);
+            if (isl !== undefined) capAtPos.set(isl, Math.max(capAtPos.get(isl) || 0, cap));
+        }
+        for (let i = 0; i < islandCount; i++) if ((capAtPos.get(i) || 0) === 0 && islandHasBus[i]) capAtPos.set(i, (+byId('cfgSimple').value || 8));
+
+        const starved = new Array(islandCount).fill(false);
+        for (let i = 0; i < islandCount; i++) {
+            const ctrlLimit = hasCtl[i] ? 32 : 8;
+            const base = Math.min(capAtPos.get(i) || 0, ctrlLimit);
+            const available = base + islandLinkCap[i];
+            if (demand[i] > available) starved[i] = true;
+        }
+
+        for (const r of RECORDS) {
+            const isl = islandFor(r);
+            if (isl === undefined) continue;
+            if (starved[isl] && (r._isCons || isPassThroughConsumer(r.item))) r._isStarved = true;
+            if (starved[isl] && r.item === 'ae2:cable_bus') r._isSus = true;
+        }
+
+        for (const r of RECORDS) {
+            const f = [];
+            if (r._isSus) f.push('SUS');
+            if (r._isStarved) f.push('STARVED');
+            if (r._isCap) f.push('CAP');
+            if (r._isVirt) f.push('VIRT');
+            if (r._isCons || /pattern_provider/i.test(r.item)) f.push('CONS');
+            r._flags = f.join(', ');
+        }
+    }
+
+    /* ---------------- filters & table ---------------- */
+    function wild(str, pat) {
+        if (!pat) return true;
+        if (pat.includes('*')) {
+            const re = new RegExp('^' + pat.split('*').map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 'i');
+            return re.test(str);
+        }
+        return str.toLowerCase().includes(pat.toLowerCase());
+    }
+
+    function range(v, min, max) {
+        if (min !== '' && v < +min) return false;
+        if (max !== '' && v > +max) return false;
+        return true;
+    }
+
+    function readFilters() {
+        return {
+            level: (byId('fLevel').value || '').trim(),
+            item: (byId('fItem').value || '').trim(),
+            xMin: byId('fXmin').value,
+            xMax: byId('fXmax').value,
+            yMin: byId('fYmin').value,
+            yMax: byId('fYmax').value,
+            zMin: byId('fZmin').value,
+            zMax: byId('fZmax').value,
+            flags: byId('fFlags').value,
+            showBL: byId('showBL').checked
+        };
+    }
+
+    function isFilterActive() {
+        const f = readFilters();
+        return !!(f.level || f.item || (f.flags && f.flags !== 'any') || f.xMin !== '' || f.xMax !== '' || f.yMin !== '' || f.yMax !== '' || f.zMin !== '' || f.zMax !== '');
+    }
+
+    function flagsMatch(r, m) {
+        if (m === 'any') return true;
+        if (m === 'none') return !r._isSus && !r._isStarved && !r._isCap && !r._isVirt && !r._isCons;
+        if (m === 'sus') return r._isSus;
+        if (m === 'starved') return r._isStarved;
+        if (m === 'cap') return r._isCap;
+        if (m === 'virt') return r._isVirt;
+        if (m === 'cons') return r._isCons;
+        return true;
+    }
+
+    function filteredTableRows() {
+        const f = readFilters();
+        let rows = RECORDS.filter(r => nsAllowed(r.item));
+        if (f.level) rows = rows.filter(r => wild(r.level, f.level));
+        if (f.item) rows = rows.filter(r => wild(r.item, f.item));
+        rows = rows.filter(r => range(r.x, f.xMin, f.xMax) && range(r.y, f.yMin, f.yMax) && range(r.z, f.zMin, f.zMax));
+        rows = rows.filter(r => flagsMatch(r, f.flags));
+        if (!f.showBL) rows = rows.filter(r => !blMatches(r.item));
+        return rows;
+    }
+
+    function sortRows(rows) {
+        const {col, dir} = SORT;
+        const v = r => r[col] ?? '';
+        rows.sort((a, b) => v(a) < v(b) ? -dir : v(a) > v(b) ? dir : 0);
+    }
+
+    function renderTable() {
+        const rows = filteredTableRows();
+        sortRows(rows);
+        const tb = byId('tbody');
+        tb.innerHTML = '';
+        for (const r of rows) {
+            const tr = document.createElement('tr');
+            tr.dataset.level = r.level;
+            tr.oncontextmenu = (ev) => {
+                ev.preventDefault();
+                openCtx(ev.clientX, ev.clientY, {x: r.x, y: r.y, z: r.z, level: r.level, item: r.item});
+            };
+            tr.onclick = async () => {
+                try {
+                    await navigator.clipboard.writeText(`/tp @s ${r.x} ${r.y} ${r.z}`);
+                } catch {
+                }
+            };
+            tr.innerHTML = `<td>${esc(r.level)}</td><td>${esc(r.item)}</td><td>${r.x}</td><td>${r.y}</td><td>${r.z}</td><td>${esc(r._flags || '')}</td>`;
+            tb.appendChild(tr);
+        }
+        byId('count').textContent = `${rows.length} rows`;
+    }
+
+    /* ---------------- 3D ---------------- */
+    let R = null, scene = null, camera = null, controls = null, raycaster = null, instanced = [], ringGroup = null,
+        highlightObj = null, highlightExpire = 0, pendingNav = null;
+
+    function rendererResize() {
+        if (!R) return;
+        const wrap = byId('canvasWrap');
+        const w = wrap.clientWidth || 1, h = wrap.clientHeight || 1;
+        R.setSize(w, h, false);
+        if (camera) {
+            camera.aspect = w / h;
+            camera.updateProjectionMatrix();
+        }
+    }
+
+    function percentile(sorted, p) {
+        if (!sorted.length) return 0;
+        const idx = (sorted.length - 1) * p, lo = Math.floor(idx), hi = Math.ceil(idx);
+        if (lo === hi) return sorted[lo];
+        return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+    }
+
+    function focusCamera(rows) {
+        if (!rows.length || !camera || !controls) return;
+        let cand = rows.filter(r => !(r.x === 0 && r.y === 0 && r.z === 0));
+        if (!cand.length) cand = rows.slice();
+        const sx = cand.map(r => r.x).sort((a, b) => a - b), sy = cand.map(r => r.y).sort((a, b) => a - b),
+            sz = cand.map(r => r.z).sort((a, b) => a - b);
+        const x5 = percentile(sx, .05), x95 = percentile(sx, .95), y5 = percentile(sy, .05), y95 = percentile(sy, .95),
+            z5 = percentile(sz, .05), z95 = percentile(sz, .95);
+        const trimmed = cand.filter(r => r.x >= x5 && r.x <= x95 && r.y >= y5 && r.y <= y95 && r.z >= z5 && r.z <= z95);
+        const use = trimmed.length ? trimmed : cand;
+        const xm = percentile(use.map(r => r.x).sort((a, b) => a - b), .5),
+            ym = percentile(use.map(r => r.y).sort((a, b) => a - b), .5),
+            zm = percentile(use.map(r => r.z).sort((a, b) => a - b), .5);
+        const extent = Math.max(Math.abs(x95 - x5) || 16, Math.abs(y95 - y5) || 16, Math.abs(z95 - z5) || 16);
+        const dist = Math.max(25, extent * 1.2);
+        camera.position.set(xm + dist, ym + dist, zm + dist);
+        controls.target.set(xm, ym, zm);
+        controls.update();
+    }
+
+    function flyTo(x, y, z) {
+        if (!camera || !controls) return;
+        camera.position.set(x + 15, y + 15, z + 15);
+        controls.target.set(x, y, z);
+        controls.update();
+    }
+
+    function addHighlight(x, y, z) {
+        const s = Math.max(0.05, +byId('cubeSize').value || 0.35) * 1.35;
+        const geom = new THREE.EdgesGeometry(new THREE.BoxGeometry(s, s, s));
+        const mat = new THREE.LineBasicMaterial({color: 0xffd54f, transparent: true, opacity: 1});
+        const mesh = new THREE.LineSegments(geom, mat);
+        mesh.position.set(x + 0.5, y + 0.5, z + 0.5);
+        if (highlightObj) scene.remove(highlightObj);
+        highlightObj = mesh;
+        highlightExpire = performance.now() + 20000;
+        scene.add(highlightObj);
+    }
+
+    function addCategoryMeshes(rows, opacity) {
+        const s = Math.max(0.05, +byId('cubeSize').value || 0.35);
+        const geom = new THREE.BoxGeometry(s, s, s);
+        const defs = [
+            {pred: r => r.item === 'ae2:cable_bus', color: 0xa78bfa},
+            {pred: r => r._isCap, color: 0xf472b6},
+            {pred: r => r._isVirt, color: 0x38bdf8},
+            {pred: r => r._isCons || /pattern_provider/i.test(r.item), color: 0x34d399},
+            {pred: r => r._isStarved, color: 0xffb74d}
+        ];
+        for (const d of defs) {
+            const items = rows.filter(d.pred);
+            if (!items.length) continue;
+            const mat = new THREE.MeshBasicMaterial({color: d.color, transparent: true, opacity});
+            const mesh = new THREE.InstancedMesh(geom, mat, items.length);
+            const m4 = new THREE.Matrix4();
+            for (let i = 0; i < items.length; i++) {
+                const r = items[i];
+                m4.makeTranslation(r.x + 0.5, r.y + 0.5, r.z + 0.5);
+                mesh.setMatrixAt(i, m4);
+            }
+            mesh.instanceMatrix.needsUpdate = true;
+            mesh.userData._rows = items;
+            scene.add(mesh);
+            instanced.push(mesh);
+        }
+    }
+
+
+    function build3D(fit = false) {
+        const wrap = byId('canvasWrap');
+        if (!R) {
+            R = new THREE.WebGLRenderer({antialias: true, preserveDrawingBuffer: true});
+            R.setClearColor(0x0b0f16, 1);
+            wrap.appendChild(R.domElement);
+            addEventListener('resize', () => {
+                setWorkHeight();
+                rendererResize();
+            });
+        }
+        rendererResize();
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(60, (R.domElement.clientWidth || 1) / (R.domElement.clientHeight || 1), 0.1, 5000);
+        camera.position.set(40, 32, 40);
+        controls = new OrbitControls(camera, R.domElement);
+        controls.enableDamping = true;
+        raycaster = new THREE.Raycaster();
+
+        const f = readFilters();
+        const dimSel = byId('dim3d').value || SELECTED_DIM;
+        const allRowsDim = RECORDS.filter(r => r.level === dimSel && nsAllowed(r.item)).filter(r => f.showBL || !blMatches(r.item));
+        const rowsAll = filteredTableRows();
+        const rowsMatch = rowsAll.filter(r => r.level === dimSel);
+        const rowsNon = allRowsDim.filter(r => !rowsMatch.includes(r));
+        const filtersActive = isFilterActive(), showContext = byId('showContext').checked;
+        byId('overlay').textContent = `${filtersActive ? '3D (filtered)' : '3D'}: ${dimSel ?? '(none)'} — ${allRowsDim.length} items`;
+
+        instanced = [];
+        ringGroup = new THREE.Group();
+        highlightObj = null;
+
+        if (filtersActive) {
+            if (showContext && rowsNon.length) addCategoryMeshes(rowsNon, GHOST_OPACITY);
+            if (rowsMatch.length) addCategoryMeshes(rowsMatch, 1.0);
+        } else {
+            if (allRowsDim.length) addCategoryMeshes(allRowsDim, UNFILTERED_OPACITY);
+        }
+
+        const s = Math.max(0.05, +byId('cubeSize').value || 0.35);
+        const sus = (filtersActive ? rowsMatch : allRowsDim).filter(r => r.item === 'ae2:cable_bus' && r._isSus);
+        if (sus.length) {
+            const rgeom = new THREE.TorusGeometry(s * 0.8, s * 0.12, 8, 24), rmat = new THREE.MeshBasicMaterial({
+                color: 0xf87171,
+                transparent: true,
+                opacity: filtersActive ? 1 : 0.75
+            });
+            for (const r of sus) {
+                const m = new THREE.Mesh(rgeom, rmat);
+                m.position.set(r.x + 0.5, r.y + 0.5, r.z + 0.5);
+                m.rotation.x = Math.PI / 2;
+                ringGroup.add(m);
+            }
+            scene.add(ringGroup);
+        }
+
+        if (fit) focusCamera(rowsMatch.length ? rowsMatch : allRowsDim);
+        if (pendingNav) {
+            flyTo(pendingNav.x, pendingNav.y, pendingNav.z);
+            addHighlight(pendingNav.x, pendingNav.y, pendingNav.z);
+            pendingNav = null;
+        }
+
+        const tip = byId('tooltip');
+        const canvas = R.domElement;
+        canvas.onmousemove = (ev) => {
+            const rect = canvas.getBoundingClientRect();
+            const mx = ((ev.clientX - rect.left) / rect.width) * 2 - 1,
+                my = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+            raycaster.setFromCamera({x: mx, y: my}, camera);
+            const hits = [];
+            for (const mesh of instanced) {
+                const inter = raycaster.intersectObject(mesh, true);
+                if (!inter.length) continue;
+                const idx = inter[0].instanceId ?? -1;
+                if (idx >= 0 && mesh.userData._rows && mesh.userData._rows[idx]) hits.push(mesh.userData._rows[idx]);
+            }
+            if (hits.length) {
+                const uniq = [...new Set(hits.map(h => h.item))];
+                tip.style.display = 'block';
+                tip.style.left = (ev.clientX + 12) + 'px';
+                tip.style.top = (ev.clientY + 12) + 'px';
+                const nx = hits[0].x, ny = hits[0].y, nz = hits[0].z;
+                tip.innerHTML = `<strong>(${nx}, ${ny}, ${nz})</strong><br/>${uniq.slice(0, 10).map(esc).join('<br/>')}${uniq.length > 10 ? '<br/>…' : ''}`;
+            } else tip.style.display = 'none';
+        };
+        canvas.onmouseleave = () => {
+            tip.style.display = 'none';
+        };
+
+        R.setAnimationLoop(() => {
+            if (highlightObj) {
+                const t = performance.now();
+                const base = 0.4 + 0.4 * Math.sin(t / 250);
+                const fade = (highlightExpire - t);
+                if (fade <= 0) {
+                    scene.remove(highlightObj);
+                    highlightObj = null;
+                } else {
+                    highlightObj.material.opacity = 0.3 + 0.5 * base;
+                    highlightObj.material.needsUpdate = true;
+                }
+            }
+            controls.update();
+            R.render(scene, camera);
+        });
+    }
+
+    /* -------------- UI wiring -------------- */
+    function renderSortIndicators() {
+        for (const th of document.querySelectorAll('thead th[data-col]')) {
+            const s = th.querySelector('.sort-ind') || (() => {
+                const x = document.createElement('span');
+                x.className = 'sort-ind';
+                th.appendChild(x);
+                return x;
+            })();
+            s.textContent = (SORT.col === th.dataset.col) ? (SORT.dir > 0 ? '▲' : '▼') : '⇅';
+        }
+    }
+
+    function renderAll() {
+        renderBlacklist();
+        renderNonConsumers();
+        renderWhitelist();
+        renderSortIndicators();
+        renderTable();
+        build3D(true);
+    }
+
+    function setControlsCollapsed(c) {
+        const wrap = byId('controlsWrap'), chev = byId('toggleChev'), txt = byId('toggleText');
+        if (c) {
+            wrap.style.maxHeight = '0px';
+            wrap.classList.add('collapsed');
+            chev.style.transform = 'rotate(180deg)';
+            txt.textContent = 'Show filters';
+        } else {
+            wrap.classList.remove('collapsed');
+            wrap.style.maxHeight = wrap.scrollHeight + 'px';
+            chev.style.transform = 'rotate(0deg)';
+            txt.textContent = 'Hide filters';
+        }
+        saveBool(LS.collapsed, c);
+        setTimeout(() => {
+            setWorkHeight();
+            rendererResize();
+            // build3D(false);
+        }, 260);
+    }
+
+    let ctxPayload = null;
+
+    function openCtx(x, y, payload) {
+        ctxPayload = payload;
+        const m = byId('ctx');
+        m.style.display = 'block';
+        const w = m.offsetWidth || 200, h = m.offsetHeight || 120;
+        m.style.left = Math.min(x, innerWidth - w - 4) + 'px';
+        m.style.top = Math.min(y, innerHeight - h - 4) + 'px';
+    }
+
+    function closeCtx() {
+        byId('ctx').style.display = 'none';
+        ctxPayload = null;
+    }
+
+    function resetControlsToDefaults(keepLists = false) {
+        byId('fLevel').value = '';
+        byId('fItem').value = '';
+        byId('fXmin').value = '';
+        byId('fXmax').value = '';
+        byId('fYmin').value = '';
+        byId('fYmax').value = '';
+        byId('fZmin').value = '';
+        byId('fZmax').value = '';
+        byId('fFlags').value = 'any';
+        byId('cubeSize').value = '0.35';
+        byId('showContext').checked = true;
+        byId('virtHeuristic').checked = true;
+        byId('cfgSimple').value = '8';
+        byId('cfgDense').value = '32';
+        byId('cfgP2P').value = '32';
+        byId('cfgWireless').value = '32';
+        byId('showBL').checked = true;
+        saveBool(LS.showBL, true);
+        if (!keepLists) {
+            BLACKLIST = [];
+            saveArr(LS.blacklist, BLACKLIST);
+            NON_CONSUMERS = ['extendedae:ex_inscriber', 'advanced_ae:reaction_chamber'];
+            saveArr(LS.nonConsumers, NON_CONSUMERS);
+            WL_LIST = ['ae2', 'megacells', 'ae2things', 'appflux', 'aeinfinitybooster', 'ae2wtlib', 'extendedae', 'ae2networkanalyser', 'advanced_ae'];
+            saveArr(LS.whitelist, WL_LIST);
+            WL_ENABLED = false;
+            byId('wlEnabled').checked = false;
+            saveBool(LS.wlEnabled, false);
+        }
+        computeSuspect();
+        renderAll();
+    }
+
+    addEventListener('load', () => {
+        setControlsCollapsed(loadBool(LS.collapsed, false));
+        byId('showBL').checked = loadBool(LS.showBL, true);
+        renderBlacklist();
+        renderNonConsumers();
+        renderWhitelist();
+
+        byId('toggleCtl').onclick = () => {
+            setControlsCollapsed(!byId('controlsWrap').classList.contains('collapsed'));
+        };
+        byId('legendBtn').onclick = () => {
+            const p = byId('legend');
+            const open = p.style.display !== 'block';
+            p.style.display = open ? 'block' : 'none';
+            byId('legendBtn').textContent = open ? 'Legend ▴' : 'Legend ▾';
+        };
+
+        byId('files').onchange = async e => {
+            if (e.target.files?.length) await loadFiles([...e.target.files]);
+        };
+
+        byId('btnClear').onclick = () => {
+            RAW = [];
+            RECORDS = [];
+            DIMENSIONS = [];
+            SELECTED_DIM = null;
+            FACE_PARTS = new Map();
+            byId('dim3d').innerHTML = '';
+            byId('tbody').innerHTML = '';
+            byId('count').textContent = '0 rows';
+            byId('overlay').textContent = '';
+            const cw = byId('canvasWrap');
+            cw.innerHTML = '';
+            if (R) {
+                try {
+                    R.dispose && R.dispose();
+                } catch (e) {
+                }
+            }
+            R = null;
+            scene = null;
+            camera = null;
+            controls = null;
+            raycaster = null;
+            instanced = [];
+            ringGroup = null;
+            highlightObj = null;
+            byId('files').value = ''; // allow re-uploading same file
+            build3D(true);
+        };
+
+        byId('btnReset').onclick = () => {
+            resetControlsToDefaults(true);
+        };
+
+        byId('blAdd').onclick = () => {
+            const v = (byId('blInput').value || '').trim().toLowerCase();
+            if (!v) return;
+            if (!/^[a-z0-9_.-]+:\*|[a-z0-9_.-]+:[a-z0-9_./-]+$/i.test(v)) {
+                alert('Use "mod:*" or "mod:item"');
+                return;
+            }
+            if (!BLACKLIST.includes(v)) BLACKLIST.push(v);
+            saveArr(LS.blacklist, BLACKLIST);
+            byId('blInput').value = '';
+            computeSuspect();
+            renderAll();
+        };
+        byId('showBL').onchange = () => {
+            saveBool(LS.showBL, byId('showBL').checked);
+            renderAll();
+        };
+
+        byId('ncAdd').onclick = () => {
+            const v = (byId('ncInput').value || '').trim().toLowerCase();
+            if (!/^[a-z0-9_.-]+:[a-z0-9_./-]+$/i.test(v)) {
+                alert('Use "mod:item"');
+                return;
+            }
+            if (!NON_CONSUMERS.includes(v)) NON_CONSUMERS.push(v);
+            saveArr(LS.nonConsumers, NON_CONSUMERS);
+            byId('ncInput').value = '';
+            computeSuspect();
+            renderAll();
+        };
+
+        byId('wlAdd').onclick = () => {
+            const ns = (byId('wlInput').value || '').trim();
+            if (!/^[a-z0-9_.-]+$/i.test(ns)) {
+                alert('Enter a namespace only');
+                return;
+            }
+            if (!WL_LIST.includes(ns)) WL_LIST.push(ns);
+            saveArr(LS.whitelist, WL_LIST);
+            byId('wlInput').value = '';
+            renderWhitelist();
+            renderAll();
+        };
+        byId('wlEnabled').onchange = () => {
+            WL_ENABLED = byId('wlEnabled').checked;
+            saveBool(LS.wlEnabled, WL_ENABLED);
+            renderAll();
+        };
+
+        const liveIds = ['fLevel', 'fItem', 'fXmin', 'fXmax', 'fYmin', 'fYmax', 'fZmin', 'fZmax', 'fFlags', 'cubeSize', 'cfgSimple', 'cfgDense', 'cfgP2P', 'cfgWireless', 'virtHeuristic', 'showContext'];
+        for (const id of liveIds) {
+            byId(id).addEventListener('input', debounce(() => {
+                computeSuspect();
+                renderTable();
+                build3D(true);
+            }, 100));
+            byId(id).addEventListener('change', () => {
+                computeSuspect();
+                renderTable();
+                build3D(true);
+            });
+        }
+        for (const th of document.querySelectorAll('thead th[data-col]')) th.onclick = () => {
+            const c = th.dataset.col;
+            SORT.col === c ? SORT.dir = -SORT.dir : (SORT.col = c, SORT.dir = 1);
+            renderSortIndicators();
+            renderTable();
+            build3D(true);
+        };
+        byId('dim3d').onchange = () => {
+            SELECTED_DIM = byId('dim3d').value || null;
+            build3D(true);
+        };
+
+        byId('gotoBtn').onclick = () => {
+            const x = +byId('gotoX').value, y = +byId('gotoY').value, z = +byId('gotoZ').value;
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
+            flyTo(x, y, z);
+            addHighlight(x, y, z);
+        };
+
+        byId('ctx').addEventListener('click', async e => {
+            if (!(e.target instanceof HTMLElement)) return;
+            const act = e.target.getAttribute('data-action');
+            if (!act || !ctxPayload) return;
+            const {x, y, z, level, item} = ctxPayload;
+            if (act === 'goto') {
+                const cur = byId('dim3d').value || SELECTED_DIM;
+                if (cur !== level) {
+                    SELECTED_DIM = level;
+                    byId('dim3d').value = level;
+                    pendingNav = {x, y, z};
+                    build3D(true);
+                } else {
+                    flyTo(x, y, z);
+                    addHighlight(x, y, z);
+                }
+            }
+            if (act === 'filter-item') {
+                byId('fItem').value = item || '';
+                renderTable();
+                build3D(true);
+            }
+            if (act === 'copy-coords') {
+                try {
+                    await navigator.clipboard.writeText(`${x} ${y} ${z}`);
+                } catch {
+                }
+            }
+            if (act === 'copy-tp') {
+                try {
+                    await navigator.clipboard.writeText(`/tp @s ${x} ${y} ${z}`);
+                } catch {
+                }
+            }
+            closeCtx();
+        });
+        addEventListener('click', e => {
+            if (e.target !== byId('ctx')) closeCtx();
+        });
+        addEventListener('scroll', closeCtx, true);
+        addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeCtx();
+        });
+
+        setWorkHeight();
+        addEventListener('resize', () => {
+            setWorkHeight();
+            rendererResize();
+        });
+    });
+
+    function setWorkHeight() {
+        const headerH = document.querySelector('header').offsetHeight;
+        const controlsH = byId('controlsWrap').classList.contains('collapsed') ? 0 : byId('controlsWrap').offsetHeight;
+        byId('work').style.height = Math.max(320, innerHeight - headerH - controlsH) + 'px';
+    }
+</script>
+</body>
+</html>
