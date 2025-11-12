@@ -1358,6 +1358,32 @@
         }
     }
 
+    function pickRowUnderMouse(ev) {
+        if (!raycaster || !camera || !R || !instanced.length) return null;
+        const rect = R.domElement.getBoundingClientRect();
+        const mx = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+        const my = -(((ev.clientY - rect.top) / rect.height) * 2 - 1);
+
+        raycaster.setFromCamera({x: mx, y: my}, camera);
+
+        // Check each instanced mesh; keep nearest hit
+        let best = null;
+        for (const mesh of instanced) {
+            const inter = raycaster.intersectObject(mesh, true);
+            if (!inter.length) continue;
+            const hit = inter[0]; // nearest for this mesh
+            const idx = hit.instanceId ?? -1;
+            if (idx < 0 || !mesh.userData || !mesh.userData._rows) continue;
+            const row = mesh.userData._rows[idx];
+            if (!row) continue;
+
+            if (!best || hit.distance < best.distance) {
+                best = {distance: hit.distance, row};
+            }
+        }
+        return best ? best.row : null;
+    }
+
 
     function build3D(fit = false) {
         const wrap = byId('canvasWrap');
@@ -1448,6 +1474,24 @@
         canvas.onmouseleave = () => {
             tip.style.display = 'none';
         };
+
+        canvas.addEventListener('contextmenu', (ev) => {
+            // Prevent the browser’s default context menu and OrbitControls’ own handler
+            ev.preventDefault();
+            ev.stopPropagation();
+
+            const row = pickRowUnderMouse(ev);
+            if (!row) return; // no hit under cursor → do nothing
+
+            // Payload expected by openCtx(): { x, y, z, level, item }
+            openCtx(ev.clientX, ev.clientY, {
+                x: row.x,
+                y: row.y,
+                z: row.z,
+                level: row.level,
+                item: row.item
+            });
+        }, {capture: true});
 
         R.setAnimationLoop(() => {
             if (highlightObj) {
