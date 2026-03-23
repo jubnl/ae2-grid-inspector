@@ -1,5 +1,36 @@
+/*
+ * ══════════════════════════════════════════════════════════════════════════════
+ *  AE2 Grid Inspector — main.js
+ *  Pipeline:
+ *    1. loadFiles()          — accepts .json / .snbt / .zip via file picker
+ *    2. parseGridJSON()      — parses grid_*.json exports
+ *       • machines[]         — each has pos{x,y,z}, level, blockState.Name, data, parts
+ *       • item-only machines — {id, item, mainNodeId} resolved via nodes[].location
+ *       • nodes[]            — {id, owner, level, location[x,y,z], exposedSides}
+ *       • join key           — node.owner → machine.id (absolute world coords)
+ *    3. parseSNBTFile()      — supplemental chunk block-entity data
+ *       • Filename:  <dim_slug>_<cx>_<cz>.snbt  (e.g. minecraft_overworld_8_11.snbt)
+ *       • Coords in SNBT: ABSOLUTE world coords (not chunk-relative)
+ *       • Formula (for reference): world = chunk * 16 + (0..15), but x/y/z are already absolute
+ *       • Top-level 'id' = block entity type; nested 'id' fields are sub-part types
+ *       • Parsed with a proper recursive-descent parseSnbt() that never throws
+ *    4. mergeAndIndex()      — dedup by (level|x|y|z|item), build RECORDS
+ *    5. computeSuspect()     — flag computation (heuristic; no live channel data in export)
+ *       • Channel capacity inferred from cable name suffix: dense→cfgDense, smart→cfgSimple
+ *       • Virtual links (p2p/wireless/quantum_link|ring): cfgP2P or cfgWireless
+ *       • Classification uses name portion only (after ':'), namespace-agnostic
+ *    6. renderTable()        — sortable, filterable data table
+ *    7. build3D()            — Three.js instanced-mesh 3-D viewport
+ *
+ *  Debug mode: append ?debug=1 to URL
+ * ══════════════════════════════════════════════════════════════════════════════
+ */
+
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const DEBUG = new URLSearchParams(location.search).has('debug') &&
+              new URLSearchParams(location.search).get('debug') !== '0';
 
 /* ── Helpers ────────────────────────────────────────────── */
 const byId = id => document.getElementById(id);
@@ -22,17 +53,14 @@ const LS = {
     nonConsumers: 'ae2_non_consumers'
 };
 
-const loadArr = k => {
-    try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : []; }
-    catch { return []; }
-};
-const saveArr = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const loadArr  = k => { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : []; } catch { return []; } };
+const saveArr  = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 const loadBool = (k, d = false) => { const v = localStorage.getItem(k); return v === null ? d : v === '1'; };
 const saveBool = (k, v) => localStorage.setItem(k, v ? '1' : '0');
 
 /* ── State ──────────────────────────────────────────────── */
 let RAW = [], RECORDS = [];
-let BLACKLIST    = loadArr(LS.blacklist).map(s => s.toLowerCase());
+let BLACKLIST     = loadArr(LS.blacklist).map(s => s.toLowerCase());
 let NON_CONSUMERS = loadArr(LS.nonConsumers).map(s => s.toLowerCase());
 if (!NON_CONSUMERS.length) NON_CONSUMERS = ['extendedae:ex_inscriber', 'advanced_ae:reaction_chamber'];
 
@@ -44,7 +72,15 @@ let WL_ENABLED = loadBool(LS.wlEnabled, false);
 let FACE_PARTS = new Map();
 const GHOST_OPACITY = 0.14, UNFILTERED_OPACITY = 0.55;
 
-/* ── Dimension / item helpers ───────────────────────────── */
+/* ── Item-name helpers ──────────────────────────────────── */
+/** Return the name portion of a modid:name string (everything after first ':').
+ *  Classification always uses this to stay namespace-agnostic. */
+function nameOf(id) {
+    if (!id) return '';
+    const c = id.indexOf(':');
+    return c >= 0 ? id.slice(c + 1) : id;
+}
+
 function canonicalizeLevel(s) {
     if (!s) return 'minecraft:overworld';
     const l = s.toLowerCase();
@@ -55,6 +91,7 @@ function canonicalizeLevel(s) {
         const [ns, rest] = s.split(':');
         return `${ns}:${rest.replace(/^_+/, '')}`;
     }
+    // filename slug like "minecraft_overworld" or "allthemodium_the_beyond"
     const idx = s.indexOf('_');
     if (idx > 0) return `${s.slice(0, idx)}:${s.slice(idx + 1)}`;
     return s;
@@ -62,12 +99,14 @@ function canonicalizeLevel(s) {
 
 const isNS = id => /^[a-z0-9_.-]+:[a-z0-9_./-]+$/.test(String(id));
 
+/** Classify by name portion only — namespace-agnostic. */
 function inferType(id) {
     if (!id) return 'other';
-    if (id === 'ae2:cable_bus') return 'bus';
-    if (/^ae2:.*(smart_)?cable$/.test(id) || /^ae2:.*dense.*cable$/.test(id) || id === 'ae2:quartz_fiber') return 'cable';
-    if (id === 'ae2:cable_anchor') return 'anchor';
-    if (id.toLowerCase().includes(':p2p') || id.toLowerCase().includes('p2p_tunnel') || id.toLowerCase().includes('wireless_connect')) return 'virt';
+    const n = nameOf(id.toLowerCase());
+    if (n === 'cable_bus') return 'bus';
+    if (/((smart_)?cable|dense.*cable)$/.test(n) || n === 'quartz_fiber') return 'cable';
+    if (n === 'cable_anchor') return 'anchor';
+    if (/p2p|wireless.*connect/.test(n)) return 'virt';
     return 'part';
 }
 
@@ -75,12 +114,143 @@ const key = (l, x, y, z) => `${l}|${x}|${y}|${z}`;
 
 function isAe2FamilyId(id) {
     if (!id) return false;
-    const [ns, path = ''] = id.split(':');
+    const ns = id.split(':')[0];
     if (!ns) return false;
     if (WL_ENABLED) return WL_LIST.includes(ns);
     const known = new Set(['ae2', 'megacells', 'ae2things', 'appflux', 'aeinfinitybooster', 'ae2wtlib', 'extendedae', 'ae2networkanalyser', 'advanced_ae']);
     if (known.has(ns)) return true;
-    return ns.includes('ae2') || path.includes('ae2') || ns.includes('advanced_ae') || path.includes('advanced_ae');
+    return ns.includes('ae2') || nameOf(id).includes('ae2') || ns.includes('advanced_ae');
+}
+
+/* ══════════════════════════════════════════════════════════
+ *  SNBT RECURSIVE-DESCENT PARSER
+ *  Never throws — logs warning and returns null on bad input.
+ *
+ *  Grammar (simplified):
+ *    value   = compound | list | typed_array | string | number
+ *    compound= '{' (key ':' value (',' key ':' value)*)? '}'
+ *    list    = '[' (value (',' value)*)? ']'
+ *    typed_array = '[' ('B'|'I'|'L') ';' (number ',')* number ']'
+ *    string  = '"' ... '"'  |  unquoted_chars
+ *    number  = [-+]? digits ['.'] digits? [eE] suffix?
+ *    suffix  = 'b'|'s'|'l'|'f'|'d'|'L'
+ *    key     = string
+ * ══════════════════════════════════════════════════════════ */
+function parseSnbt(str) {
+    /* Self-test literals drawn from real SNBT files:
+     *   parseSnbt('{id: "ae2:cable_bus", x: 138, y: 87, z: 179, keepPacked: 0b}')
+     *     -> { id: 'ae2:cable_bus', x: 138, y: 87, z: 179, keepPacked: 0 }
+     *   parseSnbt('{e: 25.0d, p: 0}') -> { e: 25, p: 0 }
+     *   parseSnbt('{arr: [B; 1b, 2b, 3b]}') -> { arr: [1,2,3] }
+     *   parseSnbt('{arr: [L; 1234567890123L, 9876543210L]}') -> { arr: [1234567890123, 9876543210] }
+     *   parseSnbt('{nested: {id: "ae2:storage_bus"}, x: 5}') -> { nested: {id:'ae2:storage_bus'}, x: 5 }
+     */
+    if (typeof str !== 'string') { console.warn('[SNBT] non-string input'); return null; }
+    try {
+        let pos = 0;
+
+        function peek()  { skipWs(); return pos < str.length ? str[pos] : ''; }
+        function next()  { skipWs(); return pos < str.length ? str[pos++] : ''; }
+        function skipWs(){ while (pos < str.length && /\s/.test(str[pos])) pos++; }
+
+        function expect(ch) {
+            const c = next();
+            if (c !== ch) throw new Error(`Expected '${ch}' got '${c}' at ${pos}`);
+        }
+
+        function parseValue() {
+            const c = peek();
+            if (c === '{') return parseCompound();
+            if (c === '[') return parseListOrArray();
+            if (c === '"') return parseQuotedString();
+            return parseUnquoted();
+        }
+
+        function parseCompound() {
+            expect('{');
+            const obj = {};
+            if (peek() === '}') { pos++; return obj; }
+            while (pos < str.length) {
+                const k = parseKey();
+                skipWs();
+                expect(':');
+                obj[k] = parseValue();
+                skipWs();
+                if (peek() === ',') { pos++; continue; }
+                if (peek() === '}') { pos++; break; }
+                // tolerate missing separator
+                break;
+            }
+            return obj;
+        }
+
+        function parseListOrArray() {
+            expect('[');
+            skipWs();
+            // Check for typed array: [B; ...] [I; ...] [L; ...]
+            if (pos + 1 < str.length && /[BIL]/i.test(str[pos]) && str[pos + 1] === ';') {
+                pos += 2; // skip type char and semicolon
+                const arr = [];
+                while (pos < str.length && peek() !== ']') {
+                    arr.push(parseUnquoted());
+                    skipWs();
+                    if (peek() === ',') pos++;
+                }
+                expect(']');
+                return arr;
+            }
+            const arr = [];
+            if (peek() === ']') { pos++; return arr; }
+            while (pos < str.length) {
+                arr.push(parseValue());
+                skipWs();
+                if (peek() === ',') { pos++; continue; }
+                if (peek() === ']') { pos++; break; }
+                break; // tolerate
+            }
+            return arr;
+        }
+
+        function parseQuotedString() {
+            expect('"');
+            let s = '';
+            while (pos < str.length) {
+                const c = str[pos++];
+                if (c === '\\') { s += str[pos++] || ''; continue; }
+                if (c === '"') break;
+                s += c;
+            }
+            return s;
+        }
+
+        function parseKey() {
+            skipWs();
+            if (peek() === '"') return parseQuotedString();
+            let s = '';
+            while (pos < str.length && /[a-zA-Z0-9_.\-#+]/.test(str[pos])) s += str[pos++];
+            return s;
+        }
+
+        function parseUnquoted() {
+            skipWs();
+            let s = '';
+            while (pos < str.length && /[^,\]\}\s]/.test(str[pos])) s += str[pos++];
+            s = s.trim();
+            // Strip numeric suffix
+            const numStr = s.replace(/[bBsSlLfFdD]$/, '');
+            const n = Number(numStr);
+            if (numStr !== '' && !isNaN(n)) return n;
+            return s;
+        }
+
+        skipWs();
+        if (pos >= str.length) return null;
+        const result = parseValue();
+        return result;
+    } catch (err) {
+        console.warn('[SNBT] parse error:', err.message, '| input snippet:', str.slice(0, 120));
+        return null;
+    }
 }
 
 /* ── File loading ───────────────────────────────────────── */
@@ -92,21 +262,21 @@ async function loadFiles(files) {
 
     for (const f of plains) {
         const text = await f.text();
-        if (f.name.endsWith('.json'))  await parseGridJSON(text, f.name);
-        else if (f.name.endsWith('.snbt')) await parseSNBT(text, f.name);
+        if (f.name.endsWith('.json'))  parseGridJSON(text, f.name);
+        else if (f.name.endsWith('.snbt')) parseSNBTFile(text, f.name);
     }
     for (const f of zips) {
         const zip = await JSZip.loadAsync(f);
         for (const [p, e] of Object.entries(zip.files)) {
             if (!e.dir && /(^|\/)grid_.*\.json$/i.test(p)) {
                 const t = await e.async('string');
-                await parseGridJSON(t, p);
+                parseGridJSON(t, p);
             }
         }
         for (const [p, e] of Object.entries(zip.files)) {
             if (!e.dir && /(^|\/)chunks\/.*\.snbt$/i.test(p)) {
                 const t = await e.async('string');
-                await parseSNBT(t, p);
+                parseSNBTFile(t, p);
             }
         }
     }
@@ -117,27 +287,53 @@ async function loadFiles(files) {
     const dims = [...new Set(RECORDS.map(r => r.level))];
     SELECTED_DIM = dims[0] || null;
     renderDimSelect();
+
+    if (DEBUG) debugDump();
+
     renderTable();
     build3D(true);
 }
 
 /* ── parseGridJSON ──────────────────────────────────────── */
-async function parseGridJSON(text, src) {
+/*
+ * grid_*.json structure:
+ *   { id, disposed, machines[], nodes[], services{} }
+ *
+ * machines can be:
+ *   A) Full machine: { id, pos{x,y,z}, level, blockState{Name}, data{cable{id}, <face>{id,...}}, parts{<face>{item,id,mainNodeId}} }
+ *   B) Item-only:    { id, item, mainNodeId }  — cable-bus part; pos resolved via nodes[]
+ *
+ * nodes[]: { id, owner, level, location[x,y,z], exposedSides }
+ *   node.owner = machine.id that owns this node
+ *   node.id == machine.id when owner == self
+ *   location = absolute world coordinates [x, y, z]
+ *
+ * Join for item-only machines: machine.mainNodeId → node.id → node.location
+ *
+ * Channel data: gn{p, e} where p=power used (always 0 in export), e=idle power drain (25 RF/t).
+ * NO live channel counts are exported; capacity is inferred from cable type.
+ */
+function parseGridJSON(text, src) {
     let obj;
-    try { obj = JSON.parse(text); } catch { return; }
+    try { obj = JSON.parse(text); } catch (e) { console.warn('[JSON] parse error in', src, e.message); return; }
 
+    // Build node lookup: node.id -> {level, loc:[x,y,z]}
     const nodeInfo = new Map();
     for (const n of (obj.nodes || [])) {
-        const level = canonicalizeLevel(n.level || 'minecraft:overworld');
-        const loc = Array.isArray(n.location) ? n.location : null;
-        nodeInfo.set(n.id, { level, loc });
+        nodeInfo.set(n.id, {
+            level: canonicalizeLevel(n.level || 'minecraft:overworld'),
+            loc: Array.isArray(n.location) && n.location.length === 3 ? n.location : null
+        });
     }
 
+    const gridId = obj.id ?? obj.name ?? '';
+
     const push = (level, x, y, z, id) => {
-        if (isNS(id)) RAW.push({
+        if (!isNS(id)) return;
+        RAW.push({
             level: canonicalizeLevel(level), x, y, z,
             item: id.toLowerCase(), type: inferType(id),
-            grid: obj.id ?? obj.name ?? '', src
+            grid: gridId, src
         });
     };
 
@@ -148,90 +344,165 @@ async function parseGridJSON(text, src) {
         m[face] = (id || '').toLowerCase();
     }
 
+    const FACES = ['center', 'up', 'down', 'north', 'south', 'east', 'west'];
+
     for (const m of (obj.machines || [])) {
-        let level = canonicalizeLevel(m.level || nodeInfo.get(m.mainNodeId)?.level || 'minecraft:overworld');
-        let x, y, z;
+        let level, x, y, z;
+
         if (m.pos && Number.isFinite(m.pos.x) && Number.isFinite(m.pos.y) && Number.isFinite(m.pos.z)) {
+            // Type A: full machine with explicit position
+            level = canonicalizeLevel(m.level || 'minecraft:overworld');
             ({ x, y, z } = m.pos);
-        } else if (nodeInfo.has(m.mainNodeId) && nodeInfo.get(m.mainNodeId).loc) {
-            const [nx, ny, nz] = nodeInfo.get(m.mainNodeId).loc;
-            x = nx; y = ny; z = nz;
+        } else if (m.mainNodeId != null) {
+            // Type B: item-only machine — resolve position via its node
+            const ni = nodeInfo.get(m.mainNodeId);
+            if (!ni || !ni.loc) continue;
+            level = ni.level;
+            [x, y, z] = ni.loc;
+        } else {
+            continue; // no position available
         }
+
+        const ix = x | 0, iy = y | 0, iz = z | 0;
         const havePos = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
-        const name = (m.blockState?.Name || '').toLowerCase();
-        if (havePos && name) push(level, x | 0, y | 0, z | 0, name);
-        const faces = ['center', 'up', 'down', 'north', 'south', 'east', 'west'];
-        if (havePos && m.parts) for (const f of faces) {
-            const p = m.parts[f];
-            if (p?.item) {
-                push(level, x | 0, y | 0, z | 0, (p.item || '').toLowerCase());
-                setFace(level, x | 0, y | 0, z | 0, f, (p.item || '').toLowerCase());
-            }
-        }
-        if (havePos && m.data) {
-            for (const f of faces) {
-                const d = m.data[f];
-                const id = (d?.id || d?.outer?.id || '').toLowerCase();
-                if (id) {
-                    push(level, x | 0, y | 0, z | 0, id);
-                    setFace(level, x | 0, y | 0, z | 0, f, id);
+        if (!havePos) continue;
+
+        // Block entity / machine item
+        const name = (m.blockState?.Name || m.item || '').toLowerCase();
+        if (name) push(level, ix, iy, iz, name);
+
+        // Face parts from machine.parts (the authoritative list of installed parts)
+        if (m.parts) {
+            for (const f of FACES) {
+                const p = m.parts[f];
+                if (p?.item) {
+                    const pid = p.item.toLowerCase();
+                    push(level, ix, iy, iz, pid);
+                    setFace(level, ix, iy, iz, f, pid);
                 }
             }
-            const c = (m.data.cable?.id || '').toLowerCase();
-            if (c) {
-                push(level, x | 0, y | 0, z | 0, c);
-                setFace(level, x | 0, y | 0, z | 0, 'center', c);
+        }
+
+        // Additional item data from machine.data (cable, face sub-data)
+        const data = m.data;
+        if (data) {
+            const cableId = (data.cable?.id || '').toLowerCase();
+            if (cableId) {
+                push(level, ix, iy, iz, cableId);
+                setFace(level, ix, iy, iz, 'center', cableId);
+            }
+            for (const f of FACES) {
+                const fd = data[f];
+                if (!fd || typeof fd !== 'object') continue;
+                const did = (fd.id || fd.outer?.id || '').toLowerCase();
+                if (did) {
+                    push(level, ix, iy, iz, did);
+                    setFace(level, ix, iy, iz, f, did);
+                }
             }
         }
-        if (havePos && m.item) push(level, x | 0, y | 0, z | 0, (m.item || '').toLowerCase());
     }
 }
 
 /* ── SNBT parsing ───────────────────────────────────────── */
-function extractBlockEntitiesArray(snbt) {
-    const m = /block_entities\s*:\s*\[/i.exec(snbt);
-    if (!m) return '';
-    let i = m.index + m[0].length - 1, depth = 0, start = i;
-    for (; i < snbt.length; i++) {
-        const ch = snbt[i];
-        if (ch === '[') depth++;
-        else if (ch === ']') { depth--; if (depth === 0) return snbt.slice(start, i + 1); }
-    }
-    return '';
-}
+/*
+ * Chunk SNBT files: chunks/<dim_slug>_<cx>_<cz>.snbt
+ *   dim_slug examples: minecraft_overworld, allthemodium_mining, allthemodium_the_beyond
+ *   Coordinates in SNBT x/y/z fields are ABSOLUTE world coordinates.
+ *   The chunk coords in the filename are informational only (formula: world = chunk*16 + offset).
+ *
+ * Block entity structure in SNBT:
+ *   { id: "ae2:cable_bus", x: 138, y: 87, z: 179, keepPacked: 0b,
+ *     cable: { id: "ae2:white_smart_cable", gn: { e: 25.0d, p: 0 } },
+ *     south: { id: "ae2:storage_bus", ... },
+ *     west:  { id: "ae2:storage_bus", ... } }
+ *
+ * IMPORTANT: 'cable.id' appears BEFORE the block-entity 'id' field in sorted NBT output.
+ * Using a regex for the first 'id:' match would capture the cable type, not the BE type.
+ * The recursive-descent parser resolves this by giving us the full compound object,
+ * from which we can read obj.id (the BE type) and obj.<face>.id (face parts) separately.
+ */
+function parseSNBTFile(text, src) {
+    // Determine dimension from filename slug
+    // Pattern: chunks/<dim_slug>_<cx>_<cz>.snbt  (cx/cz may be negative)
+    const mm = /chunks\/([^/]+?)_-?\d+_-?\d+\.snbt$/i.exec(src);
+    const level = canonicalizeLevel(mm ? mm[1] : 'minecraft:overworld');
 
-function* iterTopLevelObjects(slice) {
-    let depth = 0, start = -1;
-    for (let i = 0; i < slice.length; i++) {
-        const ch = slice[i];
-        if (ch === '{') { if (depth === 0) start = i; depth++; }
-        else if (ch === '}') {
-            depth--;
-            if (depth === 0 && start !== -1) { yield slice.slice(start, i + 1); start = -1; }
+    // Extract the block_entities array text
+    const beStart = text.search(/block_entities\s*:\s*\[/i);
+    if (beStart < 0) return;
+
+    // Find the matching '[' and walk to balanced ']'
+    let bracketPos = text.indexOf('[', beStart);
+    if (bracketPos < 0) return;
+
+    let depth = 0, arrEnd = -1;
+    for (let i = bracketPos; i < text.length; i++) {
+        if (text[i] === '[') depth++;
+        else if (text[i] === ']') { depth--; if (depth === 0) { arrEnd = i; break; } }
+    }
+    if (arrEnd < 0) return;
+    const arrSlice = text.slice(bracketPos, arrEnd + 1);
+
+    // Iterate top-level {} objects within the array
+    let d2 = 0, objStart = -1;
+    for (let i = 0; i < arrSlice.length; i++) {
+        const c = arrSlice[i];
+        if (c === '{') { if (d2 === 0) objStart = i; d2++; }
+        else if (c === '}') {
+            d2--;
+            if (d2 === 0 && objStart >= 0) {
+                const objText = arrSlice.slice(objStart, i + 1);
+                objStart = -1;
+                processSNBTBlockEntity(objText, level, src);
+            }
         }
     }
 }
 
-async function parseSNBT(text, src) {
-    let level = 'minecraft:overworld';
-    const mm = /chunks\/([^/]+)_-?\d+_-?\d+\.snbt$/i.exec(src);
-    if (mm) level = canonicalizeLevel(mm[1]);
+const SNBT_FACES = ['center', 'up', 'down', 'north', 'south', 'east', 'west'];
 
-    const arr = extractBlockEntitiesArray(text);
-    if (!arr) return;
+function processSNBTBlockEntity(objText, level, src) {
+    const obj = parseSnbt(objText);
+    if (!obj || typeof obj !== 'object') return;
 
-    const idRe = /\bid\s*:\s*"([a-z0-9_.-]+:[a-z0-9_./-]+)"/i;
-    const xRe = /\bx\s*:\s*(-?\d+)/i, yRe = /\by\s*:\s*(-?\d+)/i, zRe = /\bz\s*:\s*(-?\d+)/i;
+    // The block entity type id is the top-level 'id' field
+    const beId = (typeof obj.id === 'string' ? obj.id : '').toLowerCase();
+    if (!beId) return;
+    if (!isAe2FamilyId(beId)) {
+        // The BE itself isn't AE2 family — but it might contain AE2 parts
+        // (unlikely for non-AE2 BEs; skip for performance)
+        return;
+    }
 
-    for (const obj of iterTopLevelObjects(arr)) {
-        const idM = idRe.exec(obj);
-        if (!idM) continue;
-        const id = idM[1].toLowerCase();
-        if (!isAe2FamilyId(id)) continue;
-        const xm = xRe.exec(obj), ym = yRe.exec(obj), zm = zRe.exec(obj);
-        if (!xm || !ym || !zm) continue;
-        const x = +xm[1], y = +ym[1], z = +zm[1];
-        RAW.push({ level: canonicalizeLevel(level), x, y, z, item: id, type: inferType(id), grid: '', src });
+    // x, y, z are absolute world coords at top level
+    const x = obj.x, y = obj.y, z = obj.z;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) return;
+    const ix = x | 0, iy = y | 0, iz = z | 0;
+
+    // Push the block entity type
+    RAW.push({ level, x: ix, y: iy, z: iz, item: beId, type: inferType(beId), grid: '', src });
+
+    // Push cable (center face)
+    const cableId = (typeof obj.cable?.id === 'string' ? obj.cable.id : '').toLowerCase();
+    if (cableId && isNS(cableId)) {
+        RAW.push({ level, x: ix, y: iy, z: iz, item: cableId, type: inferType(cableId), grid: '', src });
+        const k = `${level}|${ix}|${iy}|${iz}`;
+        let fm = FACE_PARTS.get(k); if (!fm) { fm = {}; FACE_PARTS.set(k, fm); }
+        fm['center'] = cableId;
+    }
+
+    // Push face part ids
+    for (const f of SNBT_FACES) {
+        if (f === 'center') continue;
+        const faceData = obj[f];
+        if (!faceData || typeof faceData !== 'object') continue;
+        const partId = (typeof faceData.id === 'string' ? faceData.id : '').toLowerCase();
+        if (!partId || !isNS(partId) || !isAe2FamilyId(partId)) continue;
+        RAW.push({ level, x: ix, y: iy, z: iz, item: partId, type: inferType(partId), grid: '', src });
+        const k = `${level}|${ix}|${iy}|${iz}`;
+        let fm = FACE_PARTS.get(k); if (!fm) { fm = {}; FACE_PARTS.set(k, fm); }
+        fm[f] = partId;
     }
 }
 
@@ -304,7 +575,9 @@ function faceAt(level, x, y, z, face) {
 }
 
 function isBarrierId(id) {
-    return !!id && (id === 'ae2:quartz_fiber' || /quartz_fiber$/.test(id) || id === 'ae2:cable_anchor');
+    if (!id) return false;
+    const n = nameOf(id);
+    return n === 'quartz_fiber' || n === 'cable_anchor';
 }
 
 const COLOR_NAMES = ['white','orange','magenta','light_blue','yellow','lime','pink','gray','light_gray','cyan','purple','blue','brown','green','red','black'];
@@ -313,8 +586,10 @@ function cableCenterId(level, x, y, z) { return faceAt(level, x, y, z, 'center')
 
 function cableColorFromId(id) {
     if (!id) return null;
-    const m = id.match(/^ae2:(?:([a-z_]+)_)?(?:(?:dense_)?(?:smart|covered|glass)_(?:cable|covered_cable|glass_cable)|.*cable)$/i);
-    if (m && m[1]) { const c = m[1].toLowerCase(); if (COLOR_NAMES.includes(c)) return c; }
+    // Match color prefix: <color>_<type>_cable or <color>_dense_... etc.
+    const n = nameOf(id);
+    const m = n.match(/^([a-z_]+?)_((?:smart_)?(?:dense_)?(?:covered_)?(?:glass_)?cable)$/i);
+    if (m) { const c = m[1].toLowerCase(); if (COLOR_NAMES.includes(c)) return c; }
     return null;
 }
 
@@ -330,37 +605,88 @@ function edgeBlocked(level, x, y, z, dx, dy, dz) {
 }
 
 /* ── Flag computation ───────────────────────────────────── */
+/*
+ * NOTE: The AE2 grid export does NOT contain live channel-usage counts.
+ *       The gn{p, e} fields represent idle power draw (e ≈ 25 RF/t), not channel load.
+ *       All flag logic is therefore HEURISTIC, based on cable type and device type.
+ *
+ *       Thresholds are always read from UI inputs at compute time:
+ *         cfgSimple   — max channels on a smart/covered/glass cable (default 8)
+ *         cfgDense    — max channels on a dense cable (default 32)
+ *         cfgP2P      — virtual channels through a p2p tunnel (default 32)
+ *         cfgWireless — virtual channels through wireless/quantum links (default 32)
+ *
+ *       Classification uses nameOf() — namespace-agnostic.
+ */
 function computeSuspect() {
-    const simple = +byId('cfgSimple').value || 8, dense = +byId('cfgDense').value || 32,
-          p2p    = +byId('cfgP2P').value    || 32, wrl  = +byId('cfgWireless').value || 32;
+    // Read thresholds from UI at computation time
+    const simple  = +byId('cfgSimple').value   || 8;
+    const dense   = +byId('cfgDense').value    || 32;
+    const p2p     = +byId('cfgP2P').value      || 32;
+    const wrl     = +byId('cfgWireless').value || 32;
 
-    const isCableLike = id => /^ae2:.*_cable$/.test(id) || /^ae2:.*smart_.*cable$/.test(id) || /^ae2:.*dense.*cable$/.test(id) || id === 'ae2:quartz_fiber';
-    const isQuartz    = id => id === 'ae2:quartz_fiber' || /quartz_fiber$/.test(id);
-    const isAnchor    = id => id === 'ae2:cable_anchor';
-    const isCable     = id => isCableLike(id) || isQuartz(id);
-    const isLink      = id => {
+    // ── Classification predicates (namespace-agnostic via nameOf) ──
+
+    const isCable = id => {
         if (!id) return false;
-        const s = id.toLowerCase();
-        return s.includes(':p2p') || s.includes('p2p_tunnel') || s.includes('wireless') || s.includes('connector') || s.includes('quantum') || s.includes('bridge') || s.includes('link');
+        const n = nameOf(id);
+        return /((smart_)?cable|dense.*cable)$/.test(n) || n === 'quartz_fiber';
     };
+    const isDenseCable = id => !!id && /dense/.test(nameOf(id)) && isCable(id);
+    const isQuartz     = id => !!id && nameOf(id) === 'quartz_fiber';
+    const isAnchor     = id => !!id && nameOf(id) === 'cable_anchor';
     const isBarrier    = id => isQuartz(id) || isAnchor(id);
-    const isController = id => /controller/i.test(id);
+    const isController = id => !!id && /controller/.test(nameOf(id));
+
+    // Virtual channel links: p2p tunnels, wireless APs, quantum links/rings, ae2wtlib bridges
+    // Uses name portion only. Deliberately excludes "quantum_accelerator", "quantum_structure"
+    // (those are crafting/multiblock parts, not network links).
+    const isLink = id => {
+        if (!id) return false;
+        const n = nameOf(id.toLowerCase());
+        return /p2p|wireless|quantum_link|quantum_ring|quantum_bridge|quantum_tunnel/.test(n);
+    };
+
+    const isWirelessLink = id => {
+        if (!id) return false;
+        const n = nameOf(id.toLowerCase());
+        return /wireless|quantum_link|quantum_ring|quantum_bridge|quantum_tunnel/.test(n);
+    };
 
     const NON_CONS_SET = new Set(NON_CONSUMERS.map(s => s.toLowerCase()));
-    const CONSUMER_RE  = /(pattern_provider|interface|import_bus|export_bus|storage_bus|formation_plane|annihilation_plane|molecular_assembler|crafting_monitor|io_port|drive|charger|level_emitter|condenser)/i;
+
+    // Multiblock structures: all component blocks together count as ONE channel consumer.
+    // Returns a stable type-string if the item is a multiblock component, else null.
+    // Uses name portion only (namespace-agnostic). isLink() exclusion prevents matching
+    // quantum_link / quantum_ring / quantum_bridge / quantum_tunnel.
+    const multiblockType = id => {
+        if (!id) return null;
+        const n = nameOf(id.toLowerCase());
+        if (/^assembler_matrix/.test(n))                             return 'assembler_matrix';
+        if (/^quantum_/.test(n) && !isLink(id) && !isController(id)) return 'quantum_computer';
+        return null;
+    };
+
+    // Consumer RE: tested against the full id string (namespace + name).
+    // Name-portion patterns are broad enough to match any mod that follows AE2 naming conventions.
+    const CONSUMER_RE = /(pattern_provider|interface|import_bus|export_bus|storage_bus|formation_plane|annihilation_plane|assembler|crafting_monitor|io_port|drive|charger|level_emitter|condenser|quantum_accelerator|quantum_multi_threader|requester)/i;
 
     function isConsumer(id) {
         if (!id) return false;
         if (id === 'ae2:cable_bus' || isCable(id) || isBarrier(id) || isLink(id) || isController(id)) return false;
         if (blMatches(id)) return false;
         if (NON_CONS_SET.has(id.toLowerCase())) return false;
-        return CONSUMER_RE.test(id.toLowerCase());
+        if (multiblockType(id)) return true;  // all multiblock component blocks are consumers
+        return CONSUMER_RE.test(id);
     }
 
-    const isPassThroughConsumer = id => !!id && /pattern_provider/i.test(id);
+    // All consumers are passthrough: a chain of consumers adjacent to each other
+    // all draw channels from the cable they're ultimately connected to.
+    const isPassThroughConsumer = isConsumer;
     const POS = r => `${r.level}|${r.x}|${r.y}|${r.z}`;
     const SIX = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
 
+    // Build position index
     const idx = new Map();
     for (const r of RECORDS) {
         if (!nsAllowed(r.item)) continue;
@@ -371,57 +697,135 @@ function computeSuspect() {
     }
     const hasBarrierAt = (L, x, y, z) => (idx.get(`${L}|${x}|${y}|${z}`) || []).some(r => isBarrier(r.item));
 
-    const capAt  = new Map(), virtAt = new Map(), hasBusAt = new Map();
+    // Per-position channel capacity and virtual capacity
+    const capAt = new Map(), virtAt = new Map(), hasBusAt = new Map();
     for (const [k, items] of idx) {
         let cap = 0, virt = 0, hasBus = false;
         for (const rr of items) {
             const id = rr.item;
             if (id === 'ae2:cable_bus') hasBus = true;
             if (isCable(id)) {
-                if (/dense/.test(id)) cap = Math.max(cap, dense);
+                if (isDenseCable(id)) cap = Math.max(cap, dense);
                 else if (isQuartz(id)) cap = Math.max(cap, 0);
                 else cap = Math.max(cap, simple);
             }
-            if (isLink(id)) virt = Math.max(virt, id.toLowerCase().includes('wireless') ? wrl : p2p);
+            if (isLink(id)) {
+                virt = Math.max(virt, isWirelessLink(id) ? wrl : p2p);
+            }
         }
         if (cap)    capAt.set(k, cap);
         if (virt)   virtAt.set(k, virt);
         if (hasBus) hasBusAt.set(k, true);
     }
 
+    // Pre-compute multiblock cluster IDs.
+    // Connected blocks sharing the same multiblock type form one cluster and together
+    // count as a single channel consumer regardless of how many blocks the structure has.
+    const multiblockClusterOf = new Map(); // posKey -> clusterKey
+    {
+        const mbSeen = new Set();
+        let nextMb = 0;
+        for (const [k, recs] of idx) {
+            if (mbSeen.has(k)) continue;
+            const seed = recs.find(r => multiblockType(r.item));
+            if (!seed) continue;
+            const mbT = multiblockType(seed.item);
+            const clusterKey = `mb${nextMb++}`;
+            const q = [{ level: seed.level, x: seed.x, y: seed.y, z: seed.z }];
+            mbSeen.add(k);
+            multiblockClusterOf.set(k, clusterKey);
+            while (q.length) {
+                const cur = q.shift();
+                for (const [dx, dy, dz] of SIX) {
+                    const nx = cur.x + dx, ny = cur.y + dy, nz = cur.z + dz;
+                    const nk = `${cur.level}|${nx}|${ny}|${nz}`;
+                    if (mbSeen.has(nk)) continue;
+                    const nrecs = idx.get(nk) || [];
+                    if (!nrecs.some(r => multiblockType(r.item) === mbT)) continue;
+                    mbSeen.add(nk);
+                    multiblockClusterOf.set(nk, clusterKey);
+                    q.push({ level: cur.level, x: nx, y: ny, z: nz });
+                }
+            }
+        }
+    }
+
+    // Local SUS check: cable_bus positions where consumer count > cable capacity.
+    // Consumer chains: consumers adjacent to other consumers act as passthrough —
+    // every consumer in the chain draws a channel from the cable_bus it leads back to.
     const susLocal = new Set();
+
+    // Count consumers reachable from a cable_bus via consumer-to-consumer adjacency.
+    // Also counts consumers installed directly on the cable_bus (same-position parts).
+    // Stops at other cable_bus positions (they own their own consumers).
+    const countConsumerChain = (cL, cX, cY, cZ) => {
+        const seen = new Set([`${cL}|${cX}|${cY}|${cZ}`]);
+        const seenMbClusters = new Set();
+        // Returns 1 if this consumer should be counted (deduplicates multiblock clusters).
+        const countOne = (id, posKey) => {
+            if (!isConsumer(id)) return 0;
+            const mb = multiblockClusterOf.get(posKey);
+            if (mb) {
+                if (seenMbClusters.has(mb)) return 0;
+                seenMbClusters.add(mb);
+            }
+            return 1;
+        };
+        let total = 0;
+        const ownKey = `${cL}|${cX}|${cY}|${cZ}`;
+        for (const rr of (idx.get(ownKey) || [])) total += countOne(rr.item, ownKey);
+        // BFS outward through consumer chains
+        const queue = [[cX, cY, cZ]];
+        while (queue.length) {
+            const [qx, qy, qz] = queue.shift();
+            for (const [dx, dy, dz] of SIX) {
+                if (edgeBlocked(cL, qx, qy, qz, dx, dy, dz)) continue;
+                const nx = qx + dx, ny = qy + dy, nz = qz + dz;
+                const nk = `${cL}|${nx}|${ny}|${nz}`;
+                if (seen.has(nk)) continue;
+                if (hasBarrierAt(cL, nx, ny, nz)) continue;
+                seen.add(nk);
+                const nitems = idx.get(nk) || [];
+                if (nitems.some(it => it.item === 'ae2:cable_bus')) continue;
+                let posHasCons = false;
+                for (const rr of nitems) {
+                    total += countOne(rr.item, nk);
+                    if (isConsumer(rr.item)) posHasCons = true;
+                }
+                if (posHasCons) queue.push([nx, ny, nz]);
+            }
+        }
+        return total;
+    };
+
     for (const [k, items] of idx) {
         if (!items.some(it => it.item === 'ae2:cable_bus')) continue;
         const [L, x, y, z] = k.split('|');
         const X = +x, Y = +y, Z = +z;
-        let cons = 0, cap = (capAt.get(k) || 0) + (virtAt.get(k) || 0), barrier = false;
+        let cap = (capAt.get(k) || 0) + (virtAt.get(k) || 0);
         for (const [dx, dy, dz] of SIX) {
+            if (edgeBlocked(L, X, Y, Z, dx, dy, dz)) continue;
             const nx = X + dx, ny = Y + dy, nz = Z + dz;
-            if (edgeBlocked(L, X, Y, Z, dx, dy, dz)) { barrier = true; continue; }
-            if (hasBarrierAt(L, nx, ny, nz))          { barrier = true; continue; }
+            if (hasBarrierAt(L, nx, ny, nz)) continue;
             const nk = `${L}|${nx}|${ny}|${nz}`;
-            const nitems = idx.get(nk) || [];
-            for (const rr of nitems) {
-                if (isConsumer(rr.item)) cons++;
-                if (isBarrier(rr.item)) barrier = true;
-            }
             const nTot = (capAt.get(nk) || 0) + (virtAt.get(nk) || 0);
             if (nTot > cap) cap = nTot;
         }
-        if (cap === 0 && barrier) { /* isolated */ }
-        else if (cap === 0) cap = simple;
-        if (cons > cap) susLocal.add(k);
+        if (cap === 0) cap = simple; // unconfigured cable
+        if (countConsumerChain(L, X, Y, Z) > cap) susLocal.add(k);
     }
 
+    // Set per-record flags (pre-island)
     for (const r of RECORDS) {
         const id = r.item, k = POS(r);
         r._isSus     = susLocal.has(k) && id === 'ae2:cable_bus';
-        r._isCap     = isCable(id) && !/quartz_fiber$/.test(id);
+        r._isCap     = (isCable(id) && !isQuartz(id)) || isController(id);
         r._isVirt    = isLink(id);
         r._isCons    = isConsumer(id);
         r._isStarved = false;
     }
 
+    // Island / network BFS for STARVED detection
     const isNodeAt = (L, x, y, z) => {
         const arr = idx.get(`${L}|${x}|${y}|${z}`) || [];
         return arr.some(rr => rr.item === 'ae2:cable_bus' || isPassThroughConsumer(rr.item));
@@ -469,19 +873,31 @@ function computeSuspect() {
         return undefined;
     }
 
-    const demand = new Array(islandCount).fill(0),
-          hasCtl = new Array(islandCount).fill(false),
-          islandHasBus = new Array(islandCount).fill(false);
+    const demand       = new Array(islandCount).fill(0);
+    const hasCtl       = new Array(islandCount).fill(false);
+    const islandHasBus = new Array(islandCount).fill(false);
+    const islandSeenClusters = new Map(); // island id -> Set<clusterKey>
 
     for (const r of RECORDS) {
         if (!nsAllowed(r.item)) continue;
         const isl = islandFor(r);
         if (isl === undefined) continue;
-        if (/controller/i.test(r.item)) hasCtl[isl] = true;
+        if (isController(r.item)) hasCtl[isl] = true;
         if (r.item === 'ae2:cable_bus') islandHasBus[isl] = true;
-        if (r._isCons || isPassThroughConsumer(r.item)) demand[isl]++;
+        if (r._isCons || isPassThroughConsumer(r.item)) {
+            const mb = multiblockClusterOf.get(POS(r));
+            if (mb) {
+                // Whole multiblock = 1 channel; only count the cluster once per island.
+                let s = islandSeenClusters.get(isl);
+                if (!s) { s = new Set(); islandSeenClusters.set(isl, s); }
+                if (!s.has(mb)) { s.add(mb); demand[isl]++; }
+            } else {
+                demand[isl]++;
+            }
+        }
     }
 
+    // Virtual link capacity per island (optional heuristic)
     const virtHeuristic = byId('virtHeuristic').checked;
     const islandLinkCap = new Array(islandCount).fill(0);
     if (virtHeuristic) {
@@ -489,29 +905,27 @@ function computeSuspect() {
             if (!nsAllowed(r.item)) continue;
             const isl = islandFor(r);
             if (isl === undefined) continue;
-            const s = r.item.toLowerCase();
-            const isL = s.includes(':p2p') || s.includes('p2p_tunnel') || s.includes('wireless') || s.includes('connector') || s.includes('quantum') || s.includes('bridge') || s.includes('link');
-            if (!isL) continue;
-            const cap = (s.includes('wireless') || s.includes('quantum') || s.includes('connector') || s.includes('bridge') || s.includes('link'))
-                ? (+byId('cfgWireless').value || 32)
-                : (+byId('cfgP2P').value || 32);
+            if (!isLink(r.item)) continue;
+            const cap = isWirelessLink(r.item) ? wrl : p2p;
             islandLinkCap[isl] += cap;
         }
     }
 
-    const capAtPos = new Map();
+    // Per-island maximum cable capacity
+    const capAtIsland = new Map();
     for (const [k, cap] of capAt) {
         const isl = islandOf.get(k);
-        if (isl !== undefined) capAtPos.set(isl, Math.max(capAtPos.get(isl) || 0, cap));
+        if (isl !== undefined) capAtIsland.set(isl, Math.max(capAtIsland.get(isl) || 0, cap));
     }
     for (let i = 0; i < islandCount; i++) {
-        if ((capAtPos.get(i) || 0) === 0 && islandHasBus[i]) capAtPos.set(i, +byId('cfgSimple').value || 8);
+        if ((capAtIsland.get(i) || 0) === 0 && islandHasBus[i]) capAtIsland.set(i, simple);
     }
 
+    // STARVED: demand exceeds available capacity for the island
     const starved = new Array(islandCount).fill(false);
     for (let i = 0; i < islandCount; i++) {
         const ctrlLimit = hasCtl[i] ? 32 : 8;
-        const base      = Math.min(capAtPos.get(i) || 0, ctrlLimit);
+        const base      = Math.min(capAtIsland.get(i) || 0, ctrlLimit);
         const available = base + islandLinkCap[i];
         if (demand[i] > available) starved[i] = true;
     }
@@ -523,15 +937,52 @@ function computeSuspect() {
         if (starved[isl] && r.item === 'ae2:cable_bus') r._isSus = true;
     }
 
+    // Compose flag string
     for (const r of RECORDS) {
         const f = [];
         if (r._isSus)     f.push('SUS');
         if (r._isStarved) f.push('STARVED');
         if (r._isCap)     f.push('CAP');
         if (r._isVirt)    f.push('VIRT');
-        if (r._isCons || /pattern_provider/i.test(r.item)) f.push('CONS');
+        if (r._isCons || isPassThroughConsumer(r.item)) f.push('CONS');
         r._flags = f.join(', ');
     }
+}
+
+/* ── Debug mode ─────────────────────────────────────────── */
+function debugDump() {
+    console.group('[AE2-Inspector] Debug dump (debug=1)');
+    console.log('Total records:', RECORDS.length);
+
+    // First 20 records
+    const sample = RECORDS.slice(0, 20).map(r => ({
+        level: r.level, item: r.item, x: r.x, y: r.y, z: r.z,
+        type: r.type, grid: r.grid,
+        flags: r._flags || '—',
+        isSus: r._isSus, isStarved: r._isStarved, isCap: r._isCap, isVirt: r._isVirt, isCons: r._isCons
+    }));
+    console.table(sample);
+
+    // Count per flag
+    const flagCounts = { SUS: 0, STARVED: 0, CAP: 0, VIRT: 0, CONS: 0, NONE: 0 };
+    for (const r of RECORDS) {
+        if (r._isSus)     flagCounts.SUS++;
+        if (r._isStarved) flagCounts.STARVED++;
+        if (r._isCap)     flagCounts.CAP++;
+        if (r._isVirt)    flagCounts.VIRT++;
+        if (r._isCons)    flagCounts.CONS++;
+        if (!r._isSus && !r._isStarved && !r._isCap && !r._isVirt && !r._isCons) flagCounts.NONE++;
+    }
+    console.log('Flag counts:', flagCounts);
+
+    // Distinct levels
+    console.log('Distinct levels:', [...new Set(RECORDS.map(r => r.level))]);
+
+    // Join mismatches: records with no grid source (came from SNBT only, not grid JSON)
+    const snbtOnly = RECORDS.filter(r => r.grid === '' && r.src?.endsWith('.snbt'));
+    console.log('SNBT-only records (no grid JSON match):', snbtOnly.length);
+
+    console.groupEnd();
 }
 
 /* ── Filters & table ────────────────────────────────────── */
@@ -661,10 +1112,12 @@ function focusCamera(rows) {
     if (!rows.length || !camera || !controls) return;
     let cand = rows.filter(r => !(r.x === 0 && r.y === 0 && r.z === 0));
     if (!cand.length) cand = rows.slice();
-    const sx = cand.map(r => r.x).sort((a,b)=>a-b), sy = cand.map(r => r.y).sort((a,b)=>a-b), sz = cand.map(r => r.z).sort((a,b)=>a-b);
-    const x5 = percentile(sx,.05), x95 = percentile(sx,.95),
-          y5 = percentile(sy,.05), y95 = percentile(sy,.95),
-          z5 = percentile(sz,.05), z95 = percentile(sz,.95);
+    const sx = cand.map(r => r.x).sort((a,b)=>a-b),
+          sy = cand.map(r => r.y).sort((a,b)=>a-b),
+          sz = cand.map(r => r.z).sort((a,b)=>a-b);
+    const x5  = percentile(sx,.05), x95 = percentile(sx,.95),
+          y5  = percentile(sy,.05), y95 = percentile(sy,.95),
+          z5  = percentile(sz,.05), z95 = percentile(sz,.95);
     const trimmed = cand.filter(r => r.x>=x5&&r.x<=x95&&r.y>=y5&&r.y<=y95&&r.z>=z5&&r.z<=z95);
     const use = trimmed.length ? trimmed : cand;
     const xm = percentile(use.map(r=>r.x).sort((a,b)=>a-b),.5),
@@ -672,7 +1125,7 @@ function focusCamera(rows) {
           zm = percentile(use.map(r=>r.z).sort((a,b)=>a-b),.5);
     const extent = Math.max(Math.abs(x95-x5)||16, Math.abs(y95-y5)||16, Math.abs(z95-z5)||16);
     const dist = Math.max(25, extent * 1.2);
-    camera.position.set(xm + dist, ym + dist, zm + dist);
+    camera.position.set(xm + dist, ym + dist * 0.5, zm + dist);
     controls.target.set(xm, ym, zm);
     controls.update();
 }
@@ -700,11 +1153,15 @@ function addCategoryMeshes(rows, opacity) {
     const s    = Math.max(0.05, +byId('cubeSize').value || 0.35);
     const geom = new THREE.BoxGeometry(s, s, s);
     const defs = [
-        { pred: r => r.item === 'ae2:cable_bus',                             color: 0xa78bfa },
-        { pred: r => r._isCap,                                               color: 0xf472b6 },
-        { pred: r => r._isVirt,                                              color: 0x38bdf8 },
-        { pred: r => r._isCons || /pattern_provider/i.test(r.item),          color: 0x34d399 },
-        { pred: r => r._isStarved,                                           color: 0xffb74d }
+        { pred: r => r.item === 'ae2:cable_bus',                            color: 0xa78bfa },
+        { pred: r => r._isCap,                                              color: 0xf472b6 },
+        { pred: r => r._isVirt,                                             color: 0x38bdf8 },
+        { pred: r => r._isCons || /pattern_provider/i.test(r.item),         color: 0x34d399 },
+        { pred: r => r._isStarved,                                          color: 0xffb74d },
+        // catch-all: any item not covered by the predicates above (energy cells, quantum
+        // structural blocks, misc devices that don't use channels, etc.)
+        { pred: r => r.item !== 'ae2:cable_bus' && !r._isCap && !r._isVirt && !r._isCons
+                     && !r._isStarved && !/pattern_provider/i.test(r.item),  color: 0x64748b }
     ];
     for (const d of defs) {
         const items = rows.filter(d.pred);
@@ -754,13 +1211,13 @@ function build3D(fit = false) {
     rendererResize();
 
     scene    = new THREE.Scene();
-    camera   = new THREE.PerspectiveCamera(60, (R.domElement.clientWidth || 1) / (R.domElement.clientHeight || 1), 0.1, 5000);
+    camera   = new THREE.PerspectiveCamera(60, (R.domElement.clientWidth || 1) / (R.domElement.clientHeight || 1), 0.1, 8000);
     camera.position.set(40, 32, 40);
     controls = new OrbitControls(camera, R.domElement);
     controls.enableDamping = true;
     raycaster = new THREE.Raycaster();
 
-    // Subtle grid floor — positioned slightly below data centroid
+    // Grid floor — positioned slightly below data centroid
     const grid = new THREE.GridHelper(800, 80, 0x0a1a28, 0x081420);
     grid.position.y = -1;
     scene.add(grid);
@@ -852,7 +1309,7 @@ function build3D(fit = false) {
                 scene.remove(highlightObj);
                 highlightObj = null;
             } else {
-                highlightObj.material.opacity   = 0.3 + 0.5 * base;
+                highlightObj.material.opacity    = 0.3 + 0.5 * base;
                 highlightObj.material.needsUpdate = true;
             }
         }
