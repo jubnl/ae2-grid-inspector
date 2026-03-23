@@ -290,6 +290,8 @@ async function loadFiles(files) {
 
     if (DEBUG) debugDump();
 
+    byId('emptyState').classList.add('hidden');
+    byId('unloadRow').classList.add('visible');
     renderTable();
     build3D(true);
 }
@@ -1471,13 +1473,15 @@ addEventListener('load', () => {
         if (e.target.files?.length) await loadFiles([...e.target.files]);
     };
 
-    /* ── Clear ── */
-    byId('btnClear').onclick = () => {
+    /* ── Clear / Unload (shared logic) ── */
+    const unloadData = () => {
         RAW = []; RECORDS = []; DIMENSIONS = []; SELECTED_DIM = null; FACE_PARTS = new Map();
         byId('dim3d').innerHTML = '';
         byId('tbody').innerHTML = '';
         byId('count').textContent = '0 rows';
         byId('overlay').textContent = '';
+        byId('emptyState').classList.remove('hidden');
+        byId('unloadRow').classList.remove('visible');
         const cw = byId('canvasWrap');
         cw.innerHTML = '';
         if (R) { try { R.dispose?.(); } catch {} }
@@ -1485,6 +1489,12 @@ addEventListener('load', () => {
         instanced = []; ringGroup = null; highlightObj = null;
         byId('files').value = '';
         build3D(true);
+    };
+
+    byId('btnUnload').onclick = unloadData;
+
+    byId('btnClear').onclick = () => {
+        unloadData();
     };
 
     /* ── Reset ── */
@@ -1583,7 +1593,36 @@ addEventListener('load', () => {
 
     addEventListener('click',   e => { if (e.target !== byId('ctx')) closeCtx(); });
     addEventListener('scroll',  closeCtx, true);
-    addEventListener('keydown', e => { if (e.key === 'Escape') closeCtx(); });
+    addEventListener('keydown', e => {
+        if (e.key === 'Escape') {
+            closeCtx();
+            byId('helpOverlay').classList.remove('open');
+        }
+    });
+
+    /* ── Copyable command snippets ── */
+    document.addEventListener('click', async e => {
+        const el = e.target.closest('.cmd-copy');
+        if (!el) return;
+        const cmd = el.dataset.cmd || el.textContent.trim();
+        try {
+            await navigator.clipboard.writeText(cmd);
+            el.classList.add('copied');
+            const orig = el.textContent;
+            el.textContent = '✓ Copied!';
+            setTimeout(() => { el.textContent = orig; el.classList.remove('copied'); }, 1800);
+        } catch { /* clipboard unavailable */ }
+    });
+
+    /* ── Help modal ── */
+    const openHelp  = () => byId('helpOverlay').classList.add('open');
+    const closeHelp = () => byId('helpOverlay').classList.remove('open');
+    byId('helpBtn').onclick      = openHelp;
+    byId('helpBtnEmpty').onclick = openHelp;
+    byId('helpClose').onclick    = closeHelp;
+    byId('helpOverlay').addEventListener('click', e => {
+        if (e.target === byId('helpOverlay')) closeHelp();
+    });
 
     // Initial 3D build (empty scene)
     build3D(true);

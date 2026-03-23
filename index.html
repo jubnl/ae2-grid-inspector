@@ -25,6 +25,7 @@
         <h1>AE2 Grid Inspector</h1>
     </div>
     <div class="header-links">
+        <button id="helpBtn" class="btn btn-sm help-btn">? How to use</button>
         <a href="https://github.com/jubnl/ae2-grid-inspector" target="_blank" rel="noopener noreferrer" class="btn btn-sm">GitHub</a>
         <a href="https://github.com/jubnl/ae2-grid-inspector/issues" target="_blank" rel="noopener noreferrer" class="btn btn-sm">Report issue</a>
         <a href="https://apps.jubnl.ch/tools?utm_source=ae2&utm_medium=header" target="_blank" rel="noopener" class="btn btn-sm">My other tools</a>
@@ -46,6 +47,9 @@
                 <div class="ctl">
                     <label>Load files (.zip, .json, .snbt)</label>
                     <input id="files" type="file" multiple/>
+                </div>
+                <div class="ctl" id="unloadRow">
+                    <button id="btnUnload" class="btn btn-unload">Unload</button>
                 </div>
                 <div class="ctl">
                     <label>3D Dimension (table shows all)</label>
@@ -198,6 +202,18 @@
         <!-- 3D Viewport (top) -->
         <div id="right">
             <div id="canvasWrap"></div>
+
+            <!-- Empty state — visible until a file is loaded -->
+            <div id="emptyState">
+                <div class="empty-icon">◈</div>
+                <div class="empty-title">AE2 Grid Inspector</div>
+                <div class="empty-sub">Load a grid export to visualize your ME network in 3D</div>
+                <button id="helpBtnEmpty" class="btn empty-cta">How to use</button>
+                <div class="empty-hint">
+                    Run <code class="cmd-copy" data-cmd="/ae2 grids export" title="Click to copy">/ae2 grids export</code> in-game, then load the <code>.zip</code> with the panel on the left.
+                </div>
+            </div>
+
             <div id="overlay"></div>
             <button id="legendBtn" class="btn btn-sm">Legend <span class="legend-chev">▾</span></button>
 
@@ -273,6 +289,127 @@
     <div class="sep"></div>
     <button data-action="copy-coords">Copy coords</button>
     <button data-action="copy-tp">Copy /tp command</button>
+</div>
+
+<!-- ── Help modal ── -->
+<div id="helpOverlay" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+    <div id="helpModal">
+
+        <div class="help-header">
+            <span class="help-title-icon">◈</span>
+            <h2 id="helpTitle">How to use</h2>
+            <button id="helpClose" class="btn btn-sm" title="Close (Esc)">✕</button>
+        </div>
+
+        <div class="help-body">
+
+            <div class="help-section">
+                <div class="help-section-title">Step 1 — Export your network in-game</div>
+                <p>Install the <strong>AE2 Network Analyser</strong> mod, then run this command while connected to your ME network:</p>
+                <pre><code class="cmd-copy" data-cmd="/ae2 grids export" title="Click to copy">/ae2 grids export</code></pre>
+                <p class="cmd-copy-hint">↑ Click the command to copy it to your clipboard.</p>
+                <p>This writes a <code>.zip</code> file to your Minecraft instance directory (next to <code>options.txt</code>). The archive contains one <code>grid_*.json</code> per sub-network and a <code>chunks/</code> folder with block-entity SNBT data.</p>
+                <div class="help-callout">
+                    <div class="help-callout-title">⚠ Requires cheats / operator permissions</div>
+                    <div class="help-callout-body">
+                        <strong>Singleplayer:</strong> If your world was not created with cheats enabled, open it to LAN
+                        (<em>Esc → Open to LAN → Allow Cheats: ON → Start LAN World</em>) before running the command.<br/><br/>
+                        <strong>Multiplayer / server:</strong> Ask your server owner to grant you <code>/ae2</code> command
+                        privileges (operator level or a permission plugin entry for <code>ae2.command.grids</code>).
+                    </div>
+                </div>
+            </div>
+
+            <div class="help-section">
+                <div class="help-section-title">Step 2 — Load the file</div>
+                <p>Click <strong>Load files</strong> in the Data Source panel and select the <code>.zip</code>. You can also select individual <code>grid_*.json</code> or <code>.snbt</code> files directly if you have the archive unpacked.</p>
+                <p>All grids and dimensions are loaded at once. Use the <strong>3D Dimension</strong> selector to switch which world is shown in the viewport.</p>
+            </div>
+
+            <div class="help-section">
+                <div class="help-section-title">3D viewport controls</div>
+                <div class="help-grid-2">
+                    <div class="help-kv"><span class="help-key">Left drag</span><span>Orbit camera</span></div>
+                    <div class="help-kv"><span class="help-key">Right drag</span><span>Pan</span></div>
+                    <div class="help-kv"><span class="help-key">Scroll</span><span>Zoom in / out</span></div>
+                    <div class="help-kv"><span class="help-key">Hover cube</span><span>Show item &amp; coordinates</span></div>
+                    <div class="help-kv"><span class="help-key">Right-click cube</span><span>Open context menu</span></div>
+                    <div class="help-kv"><span class="help-key">Navigate widget</span><span>Fly camera to exact coords</span></div>
+                </div>
+                <p>The camera auto-fits to the loaded data when you change the dimension or reload a file.</p>
+            </div>
+
+            <div class="help-section">
+                <div class="help-section-title">Filters</div>
+                <div class="help-kv-list">
+                    <div class="help-kv"><span class="help-label">Level</span><span>Match dimension ID. Supports <code>*</code> wildcards — e.g. <code>*overworld*</code> or <code>allthemodium:*</code></span></div>
+                    <div class="help-kv"><span class="help-label">Item</span><span>Match item ID. Wildcards supported — e.g. <code>ae2:*cable*</code> or <code>*storage_bus*</code></span></div>
+                    <div class="help-kv"><span class="help-label">X / Y / Z</span><span>Min and/or max coordinate bounds. Leave either blank to apply only the other bound.</span></div>
+                    <div class="help-kv"><span class="help-label">Flags</span><span>Show only items with a given flag (SUS, STARVED, CAP, VIRT, CONS) or unflagged items.</span></div>
+                    <div class="help-kv"><span class="help-label">Blacklist</span><span>Enter <code>mod:item</code> or <code>mod:*</code> to hide an item or an entire mod. Blacklisted items are excluded from demand calculations.</span></div>
+                    <div class="help-kv"><span class="help-label">Non-consumers</span><span>Items that look like consumers but should <em>not</em> use channels. Excluded from demand calculations.</span></div>
+                </div>
+                <p>When a filter is active and <strong>Show non-matching as ghosts</strong> is on, non-matching blocks remain visible in the 3D view at low opacity for context.</p>
+            </div>
+
+            <div class="help-section">
+                <div class="help-section-title">Table interactions</div>
+                <div class="help-kv-list">
+                    <div class="help-kv"><span class="help-key">Left-click row</span><span>Copy <code>/tp @s X Y Z</code> to clipboard — paste it in-game to teleport straight to the block.</span></div>
+                    <div class="help-kv"><span class="help-key">Right-click row</span><span>Open context menu: fly the 3D camera to that block, filter the table for that item, or copy the coordinates.</span></div>
+                    <div class="help-kv"><span class="help-key">Column header</span><span>Sort ascending / descending by that column.</span></div>
+                </div>
+            </div>
+
+            <div class="help-section">
+                <div class="help-section-title">Flags explained</div>
+                <div class="help-flags">
+                    <div class="help-flag-row">
+                        <span class="flag flag-sus">SUS</span>
+                        <span>A cable bus whose reachable consumer chain exceeds the cable's channel capacity. The whole chain is walked — consumers adjacent to other consumers (passthrough) are all counted.</span>
+                    </div>
+                    <div class="help-flag-row">
+                        <span class="flag flag-starved">STARVED</span>
+                        <span>A consumer on a network island where total demand exceeds the island's available capacity (cables + virtual links, controller-aware).</span>
+                    </div>
+                    <div class="help-flag-row">
+                        <span class="flag flag-cap">CAP</span>
+                        <span>A block that provides channel capacity — smart cables (8 ch), dense cables (32 ch), or a controller.</span>
+                    </div>
+                    <div class="help-flag-row">
+                        <span class="flag flag-virt">VIRT</span>
+                        <span>A virtual channel link: P2P tunnel, wireless access point, quantum link / ring / bridge.</span>
+                    </div>
+                    <div class="help-flag-row">
+                        <span class="flag flag-cons">CONS</span>
+                        <span>A device that consumes at least one channel. Multiblock structures (assembler matrix, quantum computer) count as one consumer regardless of size.</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="help-section">
+                <div class="help-section-title">Tips</div>
+                <ul class="help-tips">
+                    <li>Adjust the <strong>Cable Config</strong> thresholds if you use mods that change channel limits — all flags recalculate instantly.</li>
+                    <li>Use the <strong>SNBT Whitelist</strong> to restrict the view to specific mod namespaces if your network mixes many mods.</li>
+                    <li>Add <code>?debug=1</code> to the URL and reload to print a detailed parse summary to the browser console.</li>
+                    <li>The export contains <em>no live channel counts</em> — SUS and STARVED detection is heuristic, based on cable type and physical topology.</li>
+                </ul>
+            </div>
+
+            <div class="help-section help-section-readme">
+                <a href="https://github.com/jubnl/ae2-grid-inspector/blob/main/README.md" target="_blank" rel="noopener noreferrer" class="help-readme-link">
+                    <span class="help-readme-icon">⬡</span>
+                    <span class="help-readme-text">
+                        <strong>Full documentation &amp; screenshots</strong>
+                        <span>github.com/jubnl/ae2-grid-inspector — README.md</span>
+                    </span>
+                    <span class="help-readme-arrow">↗</span>
+                </a>
+            </div>
+
+        </div>
+    </div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" data-cfasync="false"></script>
